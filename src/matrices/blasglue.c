@@ -316,8 +316,8 @@ void lapackglue_syev(char jobz, char uplo, int n, real *A, int fdA,
 
      FR(syev,SYEV) (&jobz, &uplo, &n, A, &fdA, w, work, &lwork, &info);
 
-     CHECK(info >= 0, "invalid argument in heev");
-     CHECK(info <= 0, "failure to converge in heev");
+     CHECK(info >= 0, "invalid argument in syev");
+     CHECK(info <= 0, "failure to converge in syev");
 }
 
 #endif

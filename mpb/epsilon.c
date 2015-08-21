@@ -26,6 +26,10 @@
 
 #include "mpb.h"
 
+/* Header file for the ctl-file (Guile) interface; automatically
+   generated from mpb.scm */
+#include <ctl-io.h>
+
 int no_size_x = 0, no_size_y = 0, no_size_z = 0;
 
 geom_box_tree geometry_tree = NULL; /* recursive tree of geometry 
@@ -254,11 +258,11 @@ static int mean_epsilon_func(symmetric_matrix *meps,
      d2 *= no_size_y ? 0 : geometry_lattice.size.y * 0.5;
      d3 *= no_size_z ? 0 : geometry_lattice.size.z * 0.5;
 
-#if 0 /* no averaging */
-     epsilon_func(meps, meps_inv, r, edata);
-     n[0] = n[1] = n[2] = 0;
-     return 1;
-#endif
+     if (!eps_averagingp) { /* no averaging */
+       epsilon_func(meps, meps_inv, r, edata);
+       n[0] = n[1] = n[2] = 0;
+       return 1;
+     }
 
      for (i = 0; i < num_neighbors[dimensions - 1]; ++i) {
 	  const geometric_object *o;

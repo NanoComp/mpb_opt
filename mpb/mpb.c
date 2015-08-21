@@ -219,8 +219,12 @@ vector3 cur_kvector;
 scalar_complex *curfield = NULL;
 int curfield_band;
 char curfield_type = '-';
-
 void curfield_reset(void) { curfield = NULL; curfield_type = '-'; }
+
+scalar_complex *curfield1 = NULL;
+int curfield1_band;
+char curfield1_type = '-';
+void curfield1_reset(void) { curfield1 = NULL; curfield1_type = '-'; }
 
 /* R[i]/G[i] are lattice/reciprocal-lattice vectors */
 real R[3][3], G[3][3];
@@ -653,7 +657,7 @@ void solve_kpoint(vector3 kvector)
 			 (void *) constraints,
 			 W, nwork_alloc, tolerance, &num_iters, flags, 0.0);
 	       else
-		    eigensolver(Hblock, eigvals + ib,
+		   eigensolver(Hblock, eigvals + ib,
 				maxwell_target_operator, (void *) mtdata,
 				simple_preconditionerp ? 
 				maxwell_target_preconditioner :
@@ -683,7 +687,7 @@ void solve_kpoint(vector3 kvector)
 			 (void *) constraints,
 			 W, nwork_alloc, tolerance, &num_iters, flags, 0.0);
 	       else
-		    eigensolver(Hblock, eigvals + ib,
+  		    eigensolver(Hblock, eigvals + ib,
 				maxwell_operator, (void *) mdata,
 				simple_preconditionerp ?
 				maxwell_preconditioner :
@@ -751,7 +755,10 @@ void solve_kpoint(vector3 kvector)
      /* create freqs array for storing frequencies in a Guile list */
      freqs.num_items = num_bands;
      CHK_MALLOC(freqs.items, number, freqs.num_items);
-     
+
+     eigenvalues.num_items = num_bands;
+     CHK_MALLOC(eigenvalues.items, number, eigenvalues.num_items);
+
      set_kpoint_index(kpoint_index + 1);
 
      mpi_one_printf("%sfreqs:, %d, %g, %g, %g, %g",
@@ -764,6 +771,17 @@ void solve_kpoint(vector3 kvector)
 	  mpi_one_printf(", %g", freqs.items[i]);
      }
      mpi_one_printf("\n");
+
+     mpi_one_printf("%seigenvalues:, %d, %g, %g, %g, %g",
+		    parity,
+		    kpoint_index, (double)k[0], (double)k[1], (double)k[2],
+		    vector3_norm(matrix3x3_vector3_mult(Gm, kvector)));
+     for (i = 0; i < num_bands; ++i) {
+	  eigenvalues.items[i] = eigvals[i];
+	  mpi_one_printf(", %g", eigenvalues.items[i]);
+     }
+     mpi_one_printf("\n");
+
 
      eigensolver_flops = evectmatrix_flops;
 
