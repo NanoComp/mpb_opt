@@ -1,4 +1,4 @@
-MPB 1.5
+MPB 1.5 (4/2/2014)
 
   * MPB now also installs a library, for use from within Meep 1.2 or later.
 
@@ -39,6 +39,9 @@ MPB 1.5
     although of course MPB eventually computes an integer grid size.
 
   * Support HDF5 1.8.
+
+  * Fix recurring "non positive-definite matrix in potrf" errors that
+    were arising due to roundoff errors preventing matrix inversion.
 
   * Fix output-at-kpoint to avoid sensitivity to roundoff errors.
 

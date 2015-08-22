@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,6 +41,7 @@ typedef void (*evectconstraint) (evectmatrix X, void *data);
 
 extern void eigensolver(evectmatrix Y, real *eigenvals,
 			evectoperator A, void *Adata,
+			evectoperator B, void *Bdata,
 			evectpreconditioner K, void *Kdata,
 			evectconstraint constraint, void *constraint_data,
 			evectmatrix Work[], int nWork,
@@ -49,6 +50,7 @@ extern void eigensolver(evectmatrix Y, real *eigenvals,
 
 extern void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 			evectoperator A, void *Adata,
+			evectoperator B, void *Bdata,
 			evectpreconditioner K, void *Kdata,
 			evectconstraint constraint, void *constraint_data,
 			evectoperator L, void *Ldata, real *lag,

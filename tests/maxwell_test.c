@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -433,7 +433,7 @@ int main(int argc, char **argv)
      printf("\nSolving for eigenvectors with preconditioning...\n");
      evectmatrix_copy(H, Hstart);
      eigensolver(H, eigvals,
-		 op, op_data,
+		 op, op_data, NULL,NULL,
 		 pre_op, pre_op_data,
 		 maxwell_parity_constraint, (void *) mdata,
 		 W, NWORK, error_tol, &num_iters, EIGS_DEFAULT_FLAGS);
@@ -466,7 +466,7 @@ int main(int argc, char **argv)
      printf("\nSolving for eigenvectors without preconditioning...\n");
      evectmatrix_copy(H, Hstart);
      eigensolver(H, eigvals,
-		 op, op_data,
+		 op, op_data, NULL,NULL,
 		 NULL, NULL,
 		 maxwell_parity_constraint, (void *) mdata,
 		 W, NWORK, error_tol, &num_iters, EIGS_DEFAULT_FLAGS);
@@ -495,7 +495,7 @@ int main(int argc, char **argv)
      printf("\nSolving for eigenvectors without conj. grad...\n");
      evectmatrix_copy(H, Hstart);
      eigensolver(H, eigvals,
-		 op, op_data,
+		 op, op_data, NULL,NULL,
 		 pre_op, pre_op_data,
 		 maxwell_parity_constraint, (void *) mdata,
 		 W, NWORK - 1, error_tol, &num_iters, EIGS_DEFAULT_FLAGS);
@@ -524,7 +524,7 @@ int main(int argc, char **argv)
      evectmatrix_copy(H, Hstart);
      eigensolver(H, eigvals,
 		 op, op_data,
-		 NULL, NULL,
+		 NULL, NULL, NULL,NULL,
 		 maxwell_parity_constraint, (void *) mdata,
 		 W, NWORK - 1, error_tol, &num_iters, EIGS_DEFAULT_FLAGS);
 

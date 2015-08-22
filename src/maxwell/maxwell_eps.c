@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -195,7 +195,7 @@ static int sym_matrix_eq(symmetric_matrix V1, symmetric_matrix V2, double tol)
 */
 void maxwell_sym_matrix_rotate(symmetric_matrix *RAR,
 			       const symmetric_matrix *A_,
-			       const double R[3][3])
+			       double R[3][3])
 {
      int i,j;
      double A[3][3], AR[3][3];
@@ -809,8 +809,27 @@ void set_maxwell_dielectric(maxwell_data *md,
      }}  /* end of loop body */
 
      mpi_allreduce_1(&eps_inv_total, real, SCALAR_MPI_TYPE,
-		     MPI_SUM, MPI_COMM_WORLD);
+		     MPI_SUM, mpb_comm);
      n1 = md->fft_output_size;
-     mpi_allreduce_1(&n1, int, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+     mpi_allreduce_1(&n1, int, MPI_INT, MPI_SUM, mpb_comm);
      md->eps_inv_mean = eps_inv_total / (3 * n1);
+}
+
+void set_maxwell_mu(maxwell_data *md,
+                    const int mesh_size[3],
+                    real R[3][3], real G[3][3],
+                    maxwell_dielectric_function mu,
+                    maxwell_dielectric_mean_function mmu,
+                    void *mu_data) {
+    symmetric_matrix *eps_inv = md->eps_inv;
+    real eps_inv_mean = md->eps_inv_mean;
+    if (md->mu_inv == NULL) {
+        CHK_MALLOC(md->mu_inv, symmetric_matrix, md->fft_output_size);        
+    }
+    /* just re-use code to set epsilon, but initialize mu_inv instead */
+    md->eps_inv = md->mu_inv;
+    set_maxwell_dielectric(md, mesh_size, R, G, mu, mmu, mu_data);
+    md->eps_inv = eps_inv;
+    md->mu_inv_mean = md->eps_inv_mean;
+    md->eps_inv_mean = eps_inv_mean;
 }

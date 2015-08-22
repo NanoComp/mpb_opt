@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -868,7 +868,7 @@ void print_material_grids_deps_du(void)
 
 	  gotmyv:
      mpi_one_printf("depsdu:, %g, %d", 
-		    mean_epsilon_from_matrix(mdata->eps_inv + index), index);
+		    mean_medium_from_matrix(mdata->eps_inv + index), index);
      for (ig = 0; ig < ntot; ++ig)
 	  mpi_one_printf(", %g", v[ig]);
      mpi_one_printf("\n");
@@ -903,7 +903,7 @@ void print_material_grids_deps_du_numeric(double du)
 	       for (k = 0; k < n3; ++k)
      {
 	  int index = ((i * n2 + j) * n3 + k);
-	  ep[index] = mean_epsilon_from_matrix(mdata->eps_inv + index);
+	  ep[index] = mean_medium_from_matrix(mdata->eps_inv + index);
      }
 
      for (iu = 0; iu < ntot; ++iu) {
@@ -917,7 +917,7 @@ void print_material_grids_deps_du_numeric(double du)
 		    {
 			 int index = ((i * n2 + j) * n3 + k);
 			 double epn = 
-			      mean_epsilon_from_matrix(mdata->eps_inv + index);
+			      mean_medium_from_matrix(mdata->eps_inv + index);
 			 v[index*ntot + iu] = (epn - ep[index]) / du;
 		    }
 	  u[iu] -= du;
@@ -949,7 +949,7 @@ void synchronize_material_grid(material_grid *g)
      double *grid;
      int n = ((int) g->size.x) * ((int) g->size.y) * ((int) g->size.z);
      grid = material_grid_array(g);
-     MPI_Bcast(grid, n, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+     MPI_Bcast(grid, n, MPI_DOUBLE, 0, mpb_comm);
      material_grid_array_release(g);
 }
 
@@ -1179,7 +1179,7 @@ static double match_eps_func(int n, const double *u, double *grad, void *data)
 	       double scalegrad;
 	       vector3 p;
 
-	       epsilon = mean_epsilon_from_matrix(mdata->eps_inv + index);
+	       epsilon = mean_medium_from_matrix(mdata->eps_inv + index);
 	       eps0 = linear_interpolate((i2 + 0.5) / n1,
 					 (j2 + 0.5) / n2,
 					 (k2 + 0.5) / n3,
@@ -1233,11 +1233,11 @@ static double match_eps_func(int n, const double *u, double *grad, void *data)
      }
      if (grad) /* gradient w.r.t. epsilon needs to be summed over processes */
 	  mpi_allreduce(work, grad, n, double, MPI_DOUBLE, 
-			MPI_SUM, MPI_COMM_WORLD);
+			MPI_SUM, mpb_comm);
      {
 	  double valtmp = val * scaleby;
 	  mpi_allreduce(&valtmp, &val, 1, double, MPI_DOUBLE,
-			MPI_SUM, MPI_COMM_WORLD);
+			MPI_SUM, mpb_comm);
      }
      mpi_one_printf("match-epsilon-file:, %d, %g\n", d->iter, sqrt(val));
      return val;

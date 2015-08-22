@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,19 @@
 #define MPI_UTILS_H
 
 #include <stdio.h>
+
+#ifdef HAVE_MPI
+#  include <mpi.h>
+extern MPI_Comm mpb_comm;
+#else
+extern int mpb_comm;
+#endif
+
+extern void end_divide_parallel(void);
+extern int divide_parallel_processes(int numgroups);
+extern void begin_global_communications(void);
+extern void end_global_communications(void);
+extern int my_global_rank();
 
 extern void mpi_die(const char *template, ...)
 #ifdef __GNUC__

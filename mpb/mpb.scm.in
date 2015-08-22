@@ -1,4 +1,4 @@
-; Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+; Copyright (C) 1999-2014 Massachusetts Institute of Technology.
 ;
 ; This program is free software; you can redistribute it and/or modify
 ; it under the terms of the GNU General Public License as published by
@@ -30,16 +30,24 @@
 
 (define-class material-type no-parent)
 
-(define-class dielectric material-type
-  (define-property epsilon no-default 'number))
+(define-class medium material-type
+  (define-property epsilon 1.0 'number)
+  (define-property mu 1.0 'number))
+(define dielectric medium) ; backwards compatibility
 
 (define (index n) (epsilon (* n n))) ; convenient substitute for epsilon
 
-(define-class dielectric-anisotropic material-type
-  (define-property epsilon-diag no-default 'vector3)
+(define-class medium-anisotropic material-type
+  (define-property epsilon-diag (vector3 1 1 1) 'vector3)
   (define-property epsilon-offdiag (vector3 0 0 0) 'cvector3)
   (define-property
-    epsilon-offdiag-imag (vector3 0 0 0) 'vector3))
+    epsilon-offdiag-imag (vector3 0 0 0) 'vector3) ; backwards compatibility
+  (define-property mu-diag (vector3 1 1 1) 'vector3)
+  (define-property mu-offdiag (vector3 0 0 0) 'cvector3)
+  (define-property
+    mu-offdiag-imag (vector3 0 0 0) 'vector3) ; backwards compatibility
+)
+(define dielectric-anisotropic medium-anisotropic) ; backwards compatibility
 
 (define-class material-function material-type
   (define-property material-func no-default 'function
@@ -57,6 +65,8 @@
     (lambda (k) (and (>= k U-MIN) (<= k U-SUM))))
   (define-property epsilon-min no-default 'number)
   (define-property epsilon-max no-default 'number)
+  (define-property mu-min 1.0 'number)
+  (define-property mu-max 1.0 'number)
   (define-property size no-default 'vector3
     (lambda (sz) (for-all? (vector->list sz)
 			   (lambda (x) (and (integer? x) (positive? x))))))
@@ -108,6 +118,8 @@
 (define-input-var eps-averaging? true 'boolean)
 
 (define-input-var epsilon-input-file "" 'string)
+(define-input-var mu-input-file "" 'string)
+(define-input-var force-mu? false 'boolean)
 
 (define-input-var deterministic? false 'boolean)
 
@@ -144,6 +156,8 @@
 (define-external-function init-params true false
   no-return-value 'integer 'boolean)
 
+(define-external-function using-mu? false false 'boolean)
+
 ; (set-parity p) changes the parity that is solved for by
 ; solve-kpoint, below.  p should be one of the following constants
 ; init-params should already have been called.  Be sure to call
@@ -164,6 +178,7 @@
 ; (randomize-fields) initializes the fields to random values; should
 ; only be called after init-params.
 (define-external-function randomize-fields false false no-return-value)
+(define-param randomize-fields? false) ; whether to always randomize
 
 ; (solve-kpoint kpoint) solves for the specified bands at the given k point.
 ; Requires that (init-params) has been called, and does not re-read the
@@ -174,6 +189,7 @@
 (define-external-function get-hfield false false no-return-value 'integer)
 (define-external-function get-efield-from-dfield false false no-return-value)
 (define-external-function get-epsilon false false no-return-value)
+(define-external-function get-mu false false no-return-value)
 (define-external-function fix-field-phase false false no-return-value)
 (define-external-function compute-field-energy false false 
 	(make-list-type 'number))
@@ -207,6 +223,9 @@
 (define-external-function mpi-proc-index false false 'integer)
 (define-external-function mpi-max false false 'number 'number)
 
+(define-external-function has-hermitian-eps? false false 'boolean)
+(define-external-function has-inversion-sym? false false 'boolean)
+
 (define-external-function get-kpoint-index false false 'integer)
 (define-external-function set-kpoint-index false false
   no-return-value 'integer)
@@ -214,6 +233,8 @@
 (define-external-function sqmatrix-size false false 'integer 'SCM)
 (define-external-function sqmatrix-ref false false 'cnumber 
   'SCM 'integer 'integer)
+(define-external-function sqmatrix-mult false false 'SCM
+  'SCM 'SCM)
 (define-external-function get-eigenvectors false false 'SCM
   'integer 'integer)
 (define-external-function set-eigenvectors false false no-return-value
@@ -456,7 +477,7 @@
   (define (try-all&repeat k)
     (let ((knew (try-all k)))
       (if (< (n knew) (n k)) (try-all&repeat knew) k)))
-  (let ((k0 (vector3- k (vector-map inexact->exact k))))
+  (let ((k0 (vector3- k (vector-map round k))))
     (if (< (n k0) (n k)) (try-all&repeat k0) (try-all&repeat k))))
 
 ; ****************************************************************
@@ -497,6 +518,10 @@
 
 (define (output-epsilon)
   (get-epsilon)
+  (output-field-to-file -1 (get-filename-prefix)))
+
+(define (output-mu)
+  (get-mu)
   (output-field-to-file -1 (get-filename-prefix)))
 
 (define (compute-energy-in-objects . objects)
@@ -613,7 +638,7 @@
     (if (> num-runs 0)
 	(let ((min-iters (apply min eigensolver-iters))
 	      (max-iters (apply max eigensolver-iters))
-	      (mean-iters (/ (fold-right + 0 eigensolver-iters) num-runs)))
+	      (mean-iters (/ (fold-right + 0.0 eigensolver-iters) num-runs)))
 	  (print "eigensolver iterations for " num-runs " k-points: "
 		 min-iters "-" max-iters ", mean = "  mean-iters)
 	  (if (defined? 'sort)  ; sort was added in Guile 1.3.x
@@ -666,6 +691,9 @@
 ; every k point.  These are typically used to output the bands.
 
 (define (run-parity p reset-fields . band-functions)
+ (if (and randomize-fields?
+          (not (member randomize-fields band-functions)))
+     (set! band-functions (cons randomize-fields band-functions)))
  (set! total-run-time (+ total-run-time
   (begin-time "total elapsed time for run: "
    (set! all-freqs '())
@@ -678,7 +706,10 @@
    (let ((k-split (list-split k-points k-split-num k-split-index)))
      (set-kpoint-index (car k-split))
      (if (zero? (car k-split))
-         (output-epsilon)) ; output epsilon immediately for 1st k block
+	 (begin 
+           (output-epsilon) ; output epsilon immediately for 1st k block
+           (if (using-mu?) (output-mu)))) ; and mu too, if we have it
+
      (if (> num-bands 0)
 	 (begin
 	   (map (lambda (k)
@@ -751,6 +782,19 @@
   (get-hfield which-band)
   (output-field-z))
 
+(define (output-bfield which-band)
+  (get-bfield which-band)
+  (output-field))
+(define (output-bfield-x which-band)
+  (get-bfield which-band)
+  (output-field-x))
+(define (output-bfield-y which-band)
+  (get-bfield which-band)
+  (output-field-y))
+(define (output-bfield-z which-band)
+  (get-bfield which-band)
+  (output-field-z))
+
 (define (output-dfield which-band)
   (get-dfield which-band)
   (output-field))
@@ -777,10 +821,11 @@
   (get-efield which-band)
   (output-field-z))
 
-(define (output-hpwr which-band)
-  (get-hfield which-band)
+(define (output-bpwr which-band)
+  (get-bfield which-band)
   (compute-field-energy)
   (output-field))
+(define output-hpwr output-bpwr) ; backwards compatibility
 
 (define (output-dpwr which-band)
   (get-dfield which-band)
@@ -817,7 +862,7 @@
   (compute-field-energy)
   (let ((epwr (field-copy cur-field))
         (tot-pwr (rscalar-field-make cur-field)))
-    (get-hfield which-band)
+    (get-bfield which-band)
     (compute-field-energy)
     (field-map! tot-pwr
                 (lambda (epwr hpwr) (+ epwr hpwr))
@@ -869,6 +914,9 @@
 ; given band based upon the spatial representation of the given field:
 (define (fix-hfield-phase which-band)
   (get-hfield which-band)
+  (fix-field-phase))
+(define (fix-bfield-phase which-band)
+  (get-bfield which-band)
   (fix-field-phase))
 (define (fix-dfield-phase which-band)
   (get-dfield which-band)

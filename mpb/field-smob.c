@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -139,11 +139,11 @@ field_smob *update_curfield_smob(void)
      curfield_smob.last_dim_size = mdata->last_dim_size;
      curfield_smob.other_dims = mdata->other_dims;
      curfield_smob.type_char = curfield_type;
-     if (strchr("dhecv", curfield_type)) { /* complex vector field */
+     if (strchr("dhbecv", curfield_type)) { /* complex vector field */
 	  curfield_smob.type = CVECTOR_FIELD_SMOB;
 	  curfield_smob.f.cv = curfield;
      }
-     else if (strchr("DHnR", curfield_type)) { /* real scalar field */
+     else if (strchr("DHBnR", curfield_type)) { /* real scalar field */
 	  curfield_smob.type = RSCALAR_FIELD_SMOB;
 	  curfield_smob.f.rs = (real *) curfield;
      }
@@ -615,7 +615,7 @@ cnumber integrate_fieldL(function f, SCM_list fields)
      {
 	  cnumber integral_sum;
 	  mpi_allreduce(&integral, &integral_sum, 2, number, 
-			MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+			MPI_DOUBLE, MPI_SUM, mpb_comm);
 	  return integral_sum;
      }
 }

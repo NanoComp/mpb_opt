@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -212,6 +212,20 @@ cnumber sqmatrix_ref(SCM mo, integer i, integer j)
      c.re = SCALAR_RE(m->data[i * m->p + j]);
      c.im = SCALAR_IM(m->data[i * m->p + j]);
      return c;
+}
+
+SCM sqmatrix_mult(SCM Ao, SCM Bo)
+{
+    sqmatrix *A = assert_sqmatrix_smob(Ao);
+    sqmatrix *B = assert_sqmatrix_smob(Bo);
+    sqmatrix C;
+    SCM obj;
+    CHECK(A->p == B->p, "only equal-size matrices can be multiplied");
+    C = create_sqmatrix(A->p);
+    sqmatrix_AeBC(C, *A, 0, *B, 0);
+    obj = sqmatrix2scm(C);
+    destroy_sqmatrix(C);
+    return obj;
 }
 
 /*************************************************************************/

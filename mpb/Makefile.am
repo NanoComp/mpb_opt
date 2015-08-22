@@ -16,11 +16,11 @@
 bin_PROGRAMS = mpb@MPB_SUFFIX@
 
 SPECIFICATION_FILE = mpb.scm
-EXTRA_DIST = mpb.scm.in
+EXTRA_DIST = mpb.scm.in epsilon.c mu.c
 
 nodist_pkgdata_DATA = $(SPECIFICATION_FILE)
 
-MY_SOURCES = epsilon.c epsilon_file.c field-smob.c fields.c	\
+MY_SOURCES = medium.c epsilon_file.c field-smob.c fields.c	\
 material_grid.c material_grid_opt.c matrix-smob.c mpb.c field-smob.h matrix-smob.h mpb.h my-smob.h \
 material_grid_opt_sdp.c material_grid_opt_lp.c
 
@@ -33,6 +33,7 @@ VERSION_STRING = "mpb@MPB_SUFFIX@ @VERSION@, Copyright (C) 1999-2012, MIT"
 
 check-local: mpb@MPB_SUFFIX@
 	./mpb@MPB_SUFFIX@ $(top_srcdir)/examples/check.ctl
+	./mpb@MPB_SUFFIX@ force-mu?=true $(top_srcdir)/examples/check.ctl
 
 dist_man_MANS = mpb-split.1 mpb.1
 
@@ -64,10 +65,17 @@ CTL_DEFS = -DCTL_SCM='"'$(LIBCTL_DIR)/base/ctl.scm'"' \
 
 mpb@MPB_SUFFIX@_SOURCES = $(MY_SOURCES)
 nodist_mpb@MPB_SUFFIX@_SOURCES = main.c geom.c ctl-io.h ctl-io.c
-BUILT_SOURCES = $(nodist_mpb@MPB_SUFFIX@_SOURCES)
+BUILT_SOURCES = $(nodist_mpb@MPB_SUFFIX@_SOURCES) mu.c
 mpb@MPB_SUFFIX@_LDADD = $(MY_LIBS)
 mpb@MPB_SUFFIX@_LDFLAGS = $(MY_LDFLAGS)
 mpb@MPB_SUFFIX@_CPPFLAGS = $(MY_CPPFLAGS) $(MY_DEFS) $(CTL_DEFS)  $(CTL_H_CPPFLAG)
+
+if MAINTAINER_MODE
+
+mu.c: epsilon.c
+	$(PERL) -pe 's/epsilon/mu/g;s/eps_inv/mu_inv/g' $< > $@
+
+endif
 
 main.c: $(LIBCTL_DIR)/base/main.c
 	cp -f $(LIBCTL_DIR)/base/main.c $@

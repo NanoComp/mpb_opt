@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -110,6 +110,8 @@ typedef struct {
 
      symmetric_matrix *eps_inv;
      real eps_inv_mean;
+     symmetric_matrix *mu_inv;
+     real mu_inv_mean;
 } maxwell_data;
 
 extern maxwell_data *create_maxwell_data(int nx, int ny, int nz,
@@ -145,12 +147,19 @@ extern void set_maxwell_dielectric(maxwell_data *md,
 				   maxwell_dielectric_mean_function mepsilon,
 				   void *epsilon_data);
 
+extern void set_maxwell_mu(maxwell_data *md,
+                           const int mesh_size[3],
+                           real R[3][3], real G[3][3],
+                           maxwell_dielectric_function mu,
+                           maxwell_dielectric_mean_function mmu,
+                           void *mu_data);
+    
 extern void maxwell_sym_matrix_eigs(real eigs[3], const symmetric_matrix *V);
 extern void maxwell_sym_matrix_invert(symmetric_matrix *Vinv,
                                       const symmetric_matrix *V);
 extern void maxwell_sym_matrix_rotate(symmetric_matrix *RAR,
 				      const symmetric_matrix *A_,
-				      const double R[3][3]);
+				      double R[3][3]);
 extern int maxwell_sym_matrix_positive_definite(symmetric_matrix *V);
 
 extern void maxwell_compute_fft(int dir, maxwell_data *d, 
@@ -162,6 +171,10 @@ extern void maxwell_compute_d_from_H(maxwell_data *d, evectmatrix Xin,
 extern void maxwell_compute_h_from_H(maxwell_data *d, evectmatrix Hin,
 				     scalar_complex *hfield,
 				     int cur_band_start, int cur_num_bands);
+extern void maxwell_compute_H_from_B(maxwell_data *d, evectmatrix Bin, 
+                                     evectmatrix Hout, scalar_complex *hfield,
+                                     int Bin_band_start, int Hout_band_start,
+                                     int cur_num_bands);
 extern void maxwell_compute_e_from_d(maxwell_data *d,
 				     scalar_complex *dfield,
 				     int cur_num_bands);
@@ -186,6 +199,8 @@ void assign_symmatrix_vector(scalar_complex *newv,
 
 extern void maxwell_operator(evectmatrix Xin, evectmatrix Xout, void *data,
 			     int is_current_eigenvector, evectmatrix Work);
+extern void maxwell_muinv_operator(evectmatrix Xin, evectmatrix Xout, void *data,
+                                   int is_current_eigenvector, evectmatrix Work);
 extern void maxwell_simple_precondition(evectmatrix X,
 					void *data, real *eigenvals);
 extern void maxwell_preconditioner(evectmatrix Xin, evectmatrix Xout,

@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -167,22 +167,43 @@ boolean using_mpip(void)
 integer mpi_num_procs(void)
 {
      int num_procs;
-     MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+     MPI_Comm_size(mpb_comm, &num_procs);
      return num_procs;
 }
 
 integer mpi_proc_index(void)
 {
      int proc_num;
-     MPI_Comm_rank(MPI_COMM_WORLD, &proc_num);
+     MPI_Comm_rank(mpb_comm, &proc_num);
      return proc_num;
 }
 
 number mpi_max(number num)
 {
      double x = num, xmax;
-     mpi_allreduce(&x, &xmax, 1, double, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+     mpi_allreduce(&x, &xmax, 1, double, MPI_DOUBLE, MPI_MAX, mpb_comm);
      return xmax;
+}
+
+/**************************************************************************/
+/* expose some build info to guile */
+
+boolean has_hermitian_epsp()
+{
+#if WITH_HERMITIAN_EPSILON
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+boolean has_inversion_symp()
+{
+#if SCALAR_COMPLEX
+    return 0;
+#else
+    return 1;
+#endif
 }
 
 /**************************************************************************/
@@ -213,7 +234,7 @@ int nwork_alloc = 0;
 
 maxwell_data *mdata = NULL;
 maxwell_target_data *mtdata = NULL;
-evectmatrix H, W[MAX_NWORK], Hblock;
+evectmatrix H, W[MAX_NWORK], Hblock, muinvH;
 
 vector3 cur_kvector;
 scalar_complex *curfield = NULL;
@@ -416,7 +437,7 @@ void init_params(integer p, boolean reset_fields)
      if (mdata) {  /* need to clean up from previous init_params call */
 	  if (nx == mdata->nx && ny == mdata->ny && nz == mdata->nz &&
 	      block_size == Hblock.alloc_p && num_bands == H.p &&
-	      eigensolver_nwork == nwork_alloc)
+	      eigensolver_nwork + (mdata->mu_inv!=NULL) == nwork_alloc)
 	       have_old_fields = 1; /* don't need to reallocate */
 	  else {
 	       destroy_evectmatrix(H);
@@ -424,6 +445,8 @@ void init_params(integer p, boolean reset_fields)
 		    destroy_evectmatrix(W[i]);
 	       if (Hblock.data != H.data)
 		    destroy_evectmatrix(Hblock);
+               if (muinvH.data != H.data)
+                   destroy_evectmatrix(muinvH);                   
 	  }
 	  destroy_maxwell_target_data(mtdata); mtdata = NULL;
 	  destroy_maxwell_data(mdata); mdata = NULL;
@@ -436,7 +459,7 @@ void init_params(integer p, boolean reset_fields)
 	  /* seed should be the same for each run, although
 	     it should be different for each process: */
 	  int rank;
-	  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	  MPI_Comm_rank(mpb_comm, &rank);
 	  srand(314159 * (rank + 1));
      }
 
@@ -450,11 +473,13 @@ void init_params(integer p, boolean reset_fields)
      else
 	  mtdata = NULL;
 
+     init_epsilon();
+
      if (!have_old_fields) {
 	  mpi_one_printf("Allocating fields...\n");
 	  H = create_evectmatrix(nx * ny * nz, 2, num_bands,
 				 local_N, N_start, alloc_N);
-	  nwork_alloc = eigensolver_nwork;
+	  nwork_alloc = eigensolver_nwork + (mdata->mu_inv!=NULL);
 	  for (i = 0; i < nwork_alloc; ++i)
 	       W[i] = create_evectmatrix(nx * ny * nz, 2, block_size,
 					 local_N, N_start, alloc_N);
@@ -463,9 +488,14 @@ void init_params(integer p, boolean reset_fields)
 					   local_N, N_start, alloc_N);
 	  else
 	       Hblock = H;
+          if (using_mup() && block_size < num_bands) {
+              muinvH = create_evectmatrix(nx * ny * nz, 2, num_bands,
+                                          local_N, N_start, alloc_N);
+          }
+          else {
+              muinvH = H;
+          }
      }
-
-     init_epsilon();
 
      mpi_one_printf("%d k-points:\n", k_points.num_items);
      for (i = 0; i < k_points.num_items; ++i)
@@ -491,6 +521,11 @@ void init_params(integer p, boolean reset_fields)
      evectmatrix_flops = eigensolver_flops; /* reset, if changed */
 }
 
+boolean using_mup(void)
+{
+    return mdata && mdata->mu_inv != NULL;
+}
+
 /**************************************************************************/
 
 /* When we are solving for a few bands at a time, we solve for the
@@ -500,7 +535,8 @@ void init_params(integer p, boolean reset_fields)
 
 typedef struct {
      evectmatrix Y;  /* the vectors to orthogonalize against; Y must
-			itself be normalized (Yt Y = 1) */
+			itself be normalized (Yt B Y = 1) */
+     evectmatrix BY;  /* B * Y */
      int p;  /* the number of columns of Y to orthogonalize against */
      scalar *S;  /* a matrix for storing the dot products; should have
 		    at least p * X.p elements (see below for X) */
@@ -511,19 +547,23 @@ static void deflation_constraint(evectmatrix X, void *data)
 {
      deflation_data *d = (deflation_data *) data;
 
-     CHECK(X.n == d->Y.n && d->Y.p >= d->p, "invalid dimensions");
+     CHECK(X.n == d->BY.n && d->BY.p >= d->p && d->Y.p >= d->p,
+           "invalid dimensions");
+
+     /* compute (1 - Y (BY)t) X = (1 - Y Yt B) X
+          = projection of X so that Yt B X = 0 */
 
      /* (Sigh...call the BLAS functions directly since we are not
-	using all the columns of Y...evectmatrix is not set up for
+	using all the columns of BY...evectmatrix is not set up for
 	this case.) */
 
-     /* compute S = Xt Y (i.e. all the dot products): */
+     /* compute S = Xt BY (i.e. all the dot products): */
      blasglue_gemm('C', 'N', X.p, d->p, X.n,
-		   1.0, X.data, X.p, d->Y.data, d->Y.p, 0.0, d->S2, d->p);
+		   1.0, X.data, X.p, d->BY.data, d->BY.p, 0.0, d->S2, d->p);
      mpi_allreduce(d->S2, d->S, d->p * X.p * SCALAR_NUMVALS,
-		   real, SCALAR_MPI_TYPE, MPI_SUM, MPI_COMM_WORLD);
+		   real, SCALAR_MPI_TYPE, MPI_SUM, mpb_comm);
 
-     /* compute X = X - Y*St = (1 - Y Yt) X */
+     /* compute X = X - Y*St = (1 - BY Yt B) X */
      blasglue_gemm('N', 'C', X.n, X.p, d->p,
 		   -1.0, d->Y.data, d->Y.p, d->S, d->p,
 		   1.0, X.data, X.p);
@@ -541,6 +581,11 @@ void solve_kpoint(vector3 kvector)
      int flags;
      deflation_data deflation;
      int prev_parity;
+
+     /* if we get too close to singular k==0 point, just set k=0
+	to exploit our special handling of this k */
+     if (vector3_norm(kvector) < 1e-10)
+	  kvector.x = kvector.y = kvector.z = 0;
 
      mpi_one_printf("solve_kpoint (%g,%g,%g):\n",
 		    kvector.x, kvector.y, kvector.z);
@@ -598,8 +643,9 @@ void solve_kpoint(vector3 kvector)
 	  ib0 = 0; /* solve for all bands */
 
      /* Set up deflation data: */
-     if (H.data != Hblock.data) {
-	  deflation.Y = H;
+     if (muinvH.data != Hblock.data) {
+          deflation.Y = H;
+          deflation.BY = muinvH.data != H.data ? muinvH : H;
 	  deflation.p = 0;
 	  CHK_MALLOC(deflation.S, scalar, H.p * Hblock.p);
 	  CHK_MALLOC(deflation.S2, scalar, H.p * Hblock.p);
@@ -638,14 +684,21 @@ void solve_kpoint(vector3 kvector)
 			 Hblock.data[in * Hblock.p + ip] =
 			      H.data[in * H.p + ip + (ib-ib0)];
 	       deflation.p = ib-ib0;
-	       if (deflation.p > 0)
+	       if (deflation.p > 0) {
+                    if (deflation.BY.data != H.data) {
+                        evectmatrix_resize(&deflation.BY, deflation.p, 0);
+                        maxwell_muinv_operator(H, deflation.BY, (void *) mdata,
+                                               1, deflation.BY);
+                    }
 		    constraints = evect_add_constraint(constraints,
 						       deflation_constraint,
 						       &deflation);
+               }
 	  }
 
 	  if (mtdata) {  /* solving for bands near a target frequency */
-	       if (eigensolver_davidsonp)
+               CHECK(mdata->mu_inv==NULL, "targeted solver doesn't handle mu");
+               if (eigensolver_davidsonp)
 		    eigensolver_davidson(
 			 Hblock, eigvals + ib,
 			 maxwell_target_operator, (void *) mtdata,
@@ -659,6 +712,7 @@ void solve_kpoint(vector3 kvector)
 	       else
 		   eigensolver(Hblock, eigvals + ib,
 				maxwell_target_operator, (void *) mtdata,
+                                NULL, NULL,
 				simple_preconditionerp ? 
 				maxwell_target_preconditioner :
 				maxwell_target_preconditioner2,
@@ -675,7 +729,8 @@ void solve_kpoint(vector3 kvector)
 					 maxwell_operator,mdata, W[0],W[1]);
 	  }
 	  else {
-	       if (eigensolver_davidsonp)
+               if (eigensolver_davidsonp) {
+                    CHECK(mdata->mu_inv==NULL, "Davidson doesn't handle mu");
 		    eigensolver_davidson(
 			 Hblock, eigvals + ib,
 			 maxwell_operator, (void *) mdata,
@@ -686,9 +741,12 @@ void solve_kpoint(vector3 kvector)
 			 evectconstraint_chain_func,
 			 (void *) constraints,
 			 W, nwork_alloc, tolerance, &num_iters, flags, 0.0);
+               }
 	       else
   		    eigensolver(Hblock, eigvals + ib,
 				maxwell_operator, (void *) mdata,
+                                mdata->mu_inv ? maxwell_muinv_operator : NULL,
+                                (void *) mdata,
 				simple_preconditionerp ?
 				maxwell_preconditioner :
 				maxwell_preconditioner2,
@@ -741,10 +799,9 @@ void solve_kpoint(vector3 kvector)
 	  free(deflation.S);
      }
 
-     if (num_write_output_vars > 1) {
+     if (num_write_output_vars > 0) {
 	  /* clean up from prev. call */
-	  free(freqs.items);
-	  free(parity);
+         destroy_output_vars();
      }
 
      CHK_MALLOC(parity, char, strlen(parity_string(mdata)) + 1);
@@ -853,14 +910,9 @@ number_list compute_group_velocity_component(vector3 d)
 	       evectmatrix_resize(&W[0], num_bands - ib, 0);
 	       evectmatrix_resize(&Hblock, num_bands - ib, 0);
 	  }
-	  if (Hblock.data != H.data) {  /* initialize fields of block from H */
-	       int in, ip;
-	       for (in = 0; in < Hblock.n; ++in)
-		    for (ip = 0; ip < Hblock.p; ++ip)
-			 Hblock.data[in * Hblock.p + ip] =
-			      H.data[in * H.p + ip + ib];
-	  }
-
+          maxwell_compute_H_from_B(mdata, H, Hblock,
+                                   (scalar_complex *) mdata->fft_data,
+                                   ib, 0, Hblock.p);
 	  maxwell_ucross_op(Hblock, W[0], mdata, u);
 	  evectmatrix_XtY_diag_real(Hblock, W[0], gv_scratch,
 				    gv_scratch + group_v.num_items);
@@ -924,13 +976,9 @@ number compute_1_group_velocity_component(vector3 d, integer b)
      CHECK(nwork_alloc > 1, "eigensolver-nwork is too small");
      evectmatrix_resize(&W[1], 1, 0);
 
-     {  /* initialize fields of block from H */
-	  int in;
-	  scalar *data = W[1].data;
-	  for (in = 0; in < W[1].n; ++in)
-	       data[in] = H.data[in * H.p + ib];
-     }
-
+     maxwell_compute_H_from_B(mdata, H, W[1],
+                              (scalar_complex *) mdata->fft_data,
+                              ib, 0, 1);
      maxwell_ucross_op(W[1], W[0], mdata, u);
      evectmatrix_XtY_diag_real(W[1], W[0], &group_v, &scratch);
 

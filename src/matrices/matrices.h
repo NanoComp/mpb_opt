@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -108,9 +108,10 @@ extern void sqmatrix_ApaBC(sqmatrix A, real a, sqmatrix B, short bdagger,
 			   sqmatrix C, short cdagger);
 extern void sqmatrix_ApaB(sqmatrix A, real a, sqmatrix B);
 extern void sqmatrix_aApbB(real a, sqmatrix A, real b, sqmatrix B);
-extern void sqmatrix_invert(sqmatrix U, short positive_definite,
+extern int sqmatrix_invert(sqmatrix U, short positive_definite,
 			    sqmatrix Work);
 extern void sqmatrix_eigensolve(sqmatrix U, real *eigenvals, sqmatrix W);
+extern void sqmatrix_gen_eigensolve(sqmatrix U, sqmatrix B, real *eigenvals, sqmatrix W);
 extern void sqmatrix_sqrt(sqmatrix Usqrt, sqmatrix U, sqmatrix W);
 
 #ifdef __cplusplus

@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -72,7 +72,7 @@ extern void eigensolver_get_eigenvals_aux(evectmatrix Y, real *eigenvals,
    size?) */
 #define CG_RESET_ITERS 70
 
-/* Threshold for trace(1/YtY) = trace(U) before we reorthogonalize: */
+/* Threshold for trace(1/YtBY) = trace(U) before we reorthogonalize: */
 #define EIGS_TRACE_U_THRESHOLD 1e8
 
 /**************************************************************************/
@@ -104,7 +104,7 @@ extern void eigensolver_get_eigenvals_aux(evectmatrix Y, real *eigenvals,
 /**************************************************************************/
 
 typedef struct {
-     sqmatrix YtAY, DtAD, symYtAD, YtY, DtD, symYtD, S1, S2, S3;
+     sqmatrix YtAY, DtAD, symYtAD, YtBY, DtBD, symYtBD, S1, S2, S3;
      real lag, d_lag, trace_YtLY, trace_DtLD, trace_YtLD;
 } trace_func_data;
 
@@ -115,10 +115,30 @@ static linmin_real trace_func(linmin_real theta, linmin_real *trace_deriv, void 
      linmin_real c = cos(theta), s = sin(theta);
 
      {
-	  sqmatrix_copy(d->S1, d->YtY);
-	  sqmatrix_aApbB(c*c, d->S1, s*s, d->DtD);
-	  sqmatrix_ApaB(d->S1, 2*s*c, d->symYtD);
-	  sqmatrix_invert(d->S1, 1, d->S2);
+	  sqmatrix_copy(d->S1, d->YtBY);
+	  sqmatrix_aApbB(c*c, d->S1, s*s, d->DtBD);
+	  sqmatrix_ApaB(d->S1, 2*s*c, d->symYtBD);
+	  if (!sqmatrix_invert(d->S1, 1, d->S2)) {
+	       /* if c or s is small, we sometimes run into numerical
+		  difficulties, and it is better to use the Taylor expansion */
+	       if (c < 1e-4 * s && c != 0) {
+		    sqmatrix_copy(d->S1, d->DtBD);
+		    CHECK(sqmatrix_invert(d->S1, 1, d->S2), "singular DtBD!");
+		    sqmatrix_AeBC(d->S2, d->S1, 0, d->symYtBD, 1);
+		    sqmatrix_AeBC(d->S3, d->S2, 0, d->S1, 1);
+		    sqmatrix_aApbB(1/(s*s), d->S1, -2*c/(s*s*s), d->S3);
+	       }
+	       else if (s < 1e-4 * c && s != 0) {
+		    sqmatrix_copy(d->S1, d->YtBY);
+		    CHECK(sqmatrix_invert(d->S1, 1, d->S2), "singular DtBD!");
+		    sqmatrix_AeBC(d->S2, d->S1, 0, d->symYtBD, 1);
+		    sqmatrix_AeBC(d->S3, d->S2, 0, d->S1, 1);
+		    sqmatrix_aApbB(1/(c*c), d->S1, -2*s/(c*c*c), d->S3);
+	       }
+	       else {
+		    CHECK(0, "inexplicable singularity in linmin trace_func");
+	       }
+	  }
 	  
 	  sqmatrix_copy(d->S2, d->YtAY);
 	  sqmatrix_aApbB(c*c, d->S2, s*s, d->DtAD);
@@ -141,9 +161,9 @@ static linmin_real trace_func(linmin_real theta, linmin_real *trace_deriv, void 
 	  sqmatrix_AeBC(d->S3, d->S1, 0, d->S2, 1);
 	  sqmatrix_AeBC(d->S2, d->S3, 0, d->S1, 1);
 	  
-	  sqmatrix_copy(d->S3, d->YtY);
-	  sqmatrix_ApaB(d->S3, -1.0, d->DtD);
-	  sqmatrix_aApbB(-0.5 * s2, d->S3, c2, d->symYtD);
+	  sqmatrix_copy(d->S3, d->YtBY);
+	  sqmatrix_ApaB(d->S3, -1.0, d->DtBD);
+	  sqmatrix_aApbB(-0.5 * s2, d->S3, c2, d->symYtBD);
 	  
 	  *trace_deriv -= SCALAR_RE(sqmatrix_traceAtB(d->S2, d->S3));
 	  *trace_deriv *= 2;
@@ -161,21 +181,22 @@ static linmin_real trace_func(linmin_real theta, linmin_real *trace_deriv, void 
 
 #define EIG_HISTORY_SIZE 5
 
-/* find eigenvectors Y of A by minimizing Rayleigh quotient
+/* find generalized eigenvectors Y of (A,B) by minimizing Rayleigh quotient
 
-        tr [ Yt A Y / (Yt Y) ] + lag * tr [ Yt L Y ]
+        tr [ Yt A Y / (Yt B Y) ] + lag * tr [ Yt L Y ]
 
    where lag is a Lagrange multiplier and L is a Hermitian operator
    implementing some constraint tr [ Yt L Y ] = 0 on the eigenvectors
    (if L is not NULL).
 
-   Constraints that commute with A (and L) are specified via the
+   Constraints that commute with A and B (and L) are specified via the
    "constraint" argument, which gives the projection operator for
    the constraint(s).
 */
 
 void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 			  evectoperator A, void *Adata,
+			  evectoperator B, void *Bdata,
 			  evectpreconditioner K, void *Kdata,
 			  evectconstraint constraint, void *constraint_data,
 			  evectoperator L, void *Ldata, real *lag,
@@ -184,7 +205,7 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 			  int flags)
 {
      real convergence_history[EIG_HISTORY_SIZE];
-     evectmatrix G, D, X, prev_G;
+     evectmatrix G, D, X, BY, prev_G, BD;
      real g_lag = 0, d_lag = 0, prev_g_lag = 0;
      short usingConjugateGradient = 0, use_polak_ribiere = 0,
 	   use_linmin = 1;
@@ -192,11 +213,11 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
      real d_scale = 1.0;
      real traceGtX, prev_traceGtX = 0.0;
      real theta, prev_theta = 0.5;
-     int i, iteration = 0;
+     int i, iteration = 0, num_emergency_restarts = 0;
      mpiglue_clock_t prev_feedback_time;
      real time_AZ, time_KZ=0, time_ZtZ, time_ZtW, time_ZS, time_linmin=0;
      real linmin_improvement = 0;
-     sqmatrix YtAYU, DtAD, symYtAD, YtY, U, DtD, symYtD, S1, S2, S3;
+     sqmatrix YtAYU, DtAD, symYtAD, YtBY, U, DtBD, symYtBD, S1, S2, S3;
      trace_func_data tfd;
 
      prev_feedback_time = MPIGLUE_CLOCK;
@@ -209,18 +230,27 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
      G = Work[0];
      X = Work[1];
 
-     usingConjugateGradient = nWork >= 3;
+     if (B) {
+         CHECK(nWork >= 3, "not enough workspace for generalized problem");
+         BY = Work[2];
+     }
+     else
+         BY = Y;
+
+     usingConjugateGradient = nWork >= 3 + (B != NULL);
      if (usingConjugateGradient) {
-          D = Work[2];
+          D = Work[2 + (B != NULL)];
           for (i = 0; i < D.n * D.p; ++i)
                ASSIGN_ZERO(D.data[i]);
      }
      else
           D = X;
 
-     use_polak_ribiere = nWork >= 4;
+     BD = B ? BY : D; /* storage for B*D (re-use B*Y storage) */
+
+     use_polak_ribiere = nWork >= 4 + (B != NULL);
      if (use_polak_ribiere) {
-          prev_G = Work[3];
+          prev_G = Work[3 + (B != NULL)];
           for (i = 0; i < Y.n * Y.p; ++i)
                ASSIGN_ZERO(prev_G.data[i]);
 	  if (flags & EIGS_ORTHOGONAL_PRECONDITIONER)  /* see below */
@@ -229,14 +259,14 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
      }
      else
           prev_G = G;
-     
+
      YtAYU = create_sqmatrix(Y.p);  /* holds Yt A Y */
      DtAD = create_sqmatrix(Y.p);  /* holds Dt A D */
      symYtAD = create_sqmatrix(Y.p);  /* holds (Yt A D + Dt A Y) / 2 */
-     YtY = create_sqmatrix(Y.p);  /* holds Yt Y */
+     YtBY = create_sqmatrix(Y.p);  /* holds Yt B Y */
      U = create_sqmatrix(Y.p);  /* holds 1 / (Yt Y) */
-     DtD = create_sqmatrix(Y.p);  /* holds Dt D */
-     symYtD = create_sqmatrix(Y.p);  /* holds (Yt D + Dt Y) / 2 */
+     DtBD = create_sqmatrix(Y.p);  /* holds Dt B D */
+     symYtBD = create_sqmatrix(Y.p);  /* holds (Yt B D + Dt B Y) / 2 */
 
      /* Notation note: "t" represents a dagger superscript, so
 	Yt represents adjoint(Y), or Y' in MATLAB syntax. */
@@ -247,13 +277,21 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
      S3 = create_sqmatrix(Y.p);
 
      tfd.YtAY = S1; tfd.DtAD = DtAD; tfd.symYtAD = symYtAD;
-     tfd.YtY = YtY; tfd.DtD = DtD; tfd.symYtD = symYtD;
+     tfd.YtBY = YtBY; tfd.DtBD = DtBD; tfd.symYtBD = symYtBD;
      tfd.S1 = YtAYU; tfd.S2 = S2; tfd.S3 = S3;
 
+ restartY:
+
      if (flags & EIGS_ORTHONORMALIZE_FIRST_STEP) {
-	  evectmatrix_XtX(U, Y, S2);
+          if (B) {
+              B(Y, BY, Bdata, 1, G); /* B*Y; G is scratch */
+              evectmatrix_XtY(U, Y, BY, S2);
+          }
+          else {
+              evectmatrix_XtX(U, Y, S2);
+          }
 	  sqmatrix_assert_hermitian(U);
-	  sqmatrix_invert(U, 1, S2);
+	  CHECK(sqmatrix_invert(U, 1, S2), "non-independent initial Y");
 	  sqmatrix_sqrt(S1, U, S2); /* S1 = 1/sqrt(Yt*Y) */
 	  evectmatrix_XeYS(G, Y, S1, 1); /* G = orthonormalize Y */
 	  evectmatrix_copy(Y, G);
@@ -274,17 +312,36 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 	  if (flags & EIGS_FORCE_APPROX_LINMIN)
 	       use_linmin = 0;
 
-	  TIME_OP(time_ZtZ, evectmatrix_XtX(YtY, Y, S2));
-	  sqmatrix_assert_hermitian(YtY);
+          if (B) {
+              B(Y, BY, Bdata, 1, G); /* B*Y; G is scratch */
+              TIME_OP(time_ZtZ, evectmatrix_XtY(YtBY, Y, BY, S2));
+          }
+          else {
+              TIME_OP(time_ZtZ, evectmatrix_XtX(YtBY, Y, S2));
+          }
+	  sqmatrix_assert_hermitian(YtBY);
 
-	  y_norm = sqrt(SCALAR_RE(sqmatrix_trace(YtY)) / Y.p);
+	  y_norm = sqrt(SCALAR_RE(sqmatrix_trace(YtBY)) / Y.p);
 	  blasglue_rscal(Y.p * Y.n, 1/y_norm, Y.data, 1);
-	  blasglue_rscal(Y.p * Y.p, 1/(y_norm*y_norm), YtY.data, 1);
+	  if (B) blasglue_rscal(Y.p * Y.n, 1/y_norm, BY.data, 1);
+	  blasglue_rscal(Y.p * Y.p, 1/(y_norm*y_norm), YtBY.data, 1);
 
-	  sqmatrix_copy(U, YtY);
-	  sqmatrix_invert(U, 1, S2);
+	  sqmatrix_copy(U, YtBY);
+	  if (!sqmatrix_invert(U, 1, S2)) { /* non-independent Y columns */
+	       /* emergency restart with random Y */
+	       CHECK(iteration + 10 * ++num_emergency_restarts
+		     < EIGENSOLVER_MAX_ITERATIONS, 
+		     "too many emergency restarts");
+	       mpi_one_printf("    emergency randomization of Y on iter. %d\n",
+			      iteration);
+	       for (i = 0; i < Y.p * Y.n; ++i)
+		    ASSIGN_SCALAR(Y.data[i],
+				  rand() * 1.0 / RAND_MAX - 0.5,
+				  rand() * 1.0 / RAND_MAX - 0.5);
+	       goto restartY;
+	  }
 
-	  /* If trace(1/YtY) gets big, it means that the columns
+	  /* If trace(1/YtBY) gets big, it means that the columns
 	     of Y are becoming nearly parallel.  This sometimes happens,
 	     especially in the targeted eigensolver, because the
 	     preconditioner pushes all the columns towards the ground
@@ -300,13 +357,19 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 		    evectmatrix_XeYS(G, Y, S1, 1); /* G = orthonormalize Y */
 		    evectmatrix_copy(Y, G);
 		    prev_traceGtX = 0.0;
-
-		    evectmatrix_XtX(YtY, Y, S2);
-		    y_norm = sqrt(SCALAR_RE(sqmatrix_trace(YtY)) / Y.p);
+                    if (B) {
+                        B(Y, BY, Bdata, 1, G); /* B*Y; G is scratch */
+                        evectmatrix_XtY(YtBY, Y, BY, S2);
+                    }
+                    else
+                        evectmatrix_XtX(YtBY, Y, S2);
+		    y_norm = sqrt(SCALAR_RE(sqmatrix_trace(YtBY)) / Y.p);
 		    blasglue_rscal(Y.p * Y.n, 1/y_norm, Y.data, 1);
-		    blasglue_rscal(Y.p * Y.p, 1/(y_norm*y_norm), YtY.data, 1);
-		    sqmatrix_copy(U, YtY);
-		    sqmatrix_invert(U, 1, S2);
+		    if (B) blasglue_rscal(Y.p * Y.n, 1/y_norm, BY.data, 1);
+		    blasglue_rscal(Y.p * Y.p, 1/(y_norm*y_norm), YtBY.data, 1);
+		    sqmatrix_copy(U, YtBY);
+		    CHECK(sqmatrix_invert(U, 1, S2),
+			  "non-independent Y after re-orthogonalization");
 	       }
 	  }
 
@@ -352,9 +415,9 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
               fabs(E - prev_E) < tolerance * 0.5 * (E + prev_E + 1e-7))
                break; /* convergence!  hooray! */
 	  
-	  /* Compute gradient of functional: G = (1 - Y U Yt) A Y U */
+	  /* Compute gradient of functional: G = (1 - BY U Yt) A Y U */
 	  sqmatrix_AeBC(S1, U, 0, YtAYU, 0);
-	  evectmatrix_XpaYS(G, -1.0, Y, S1, 1);
+	  evectmatrix_XpaYS(G, -1.0, BY, S1, 1);
 
 	  if (L) { /* include Lagrange gradient; note X = LY from above */
 	       evectmatrix_aXpbY(1.0, G, *lag, X);
@@ -362,7 +425,7 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 
 	  /* set X = precondition(G): */
 	  if (K != NULL) {
-	       TIME_OP(time_KZ, K(G, X, Kdata, Y, NULL, YtY));
+	       TIME_OP(time_KZ, K(G, X, Kdata, Y, NULL, YtBY));
 	       /* Note: we passed NULL for eigenvals since we haven't
                   diagonalized YAY (nor are the Y's orthonormal). */
 	  }
@@ -375,10 +438,10 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
                constraint(X, constraint_data);
 
 	  if (flags & EIGS_PROJECT_PRECONDITIONING) {
-               /* Operate projection P = (1 - Y U Yt) on X: */
-               evectmatrix_XtY(symYtD, Y, X, S2);  /* symYtD = Yt X */
-	       sqmatrix_AeBC(S1, U, 0, symYtD, 0);
-	       evectmatrix_XpaYS(X, -1.0, Y, S1, 0);
+               /* Operate projection P = (1 - BY U Yt) on X: */
+               evectmatrix_XtY(symYtBD, Y, X, S2);  /* symYtBD = Yt X */
+	       sqmatrix_AeBC(S1, U, 0, symYtBD, 0);
+	       evectmatrix_XpaYS(X, -1.0, BY, S1, 0);
           }
 
 	  /* Now, for the case of EIGS_ORTHOGONAL_PRECONDITIONER, we
@@ -425,7 +488,7 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 
 	       /* set G = precondition(Y): */
 	       if (K != NULL)
-		    K(Y, G, Kdata, Y, NULL, YtY);
+		    K(Y, G, Kdata, Y, NULL, YtBY);
 	       else
 		    evectmatrix_copy(G, Y);  /* preconditioner is identity */
 
@@ -433,7 +496,8 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 		  S3 = (YtKG)t / (YtKY).  Recall that, at this point,
 		  X holds KG and G holds KY.  K is assumed Hermitian. */
 	       evectmatrix_XtY(S1, Y, G, S2);
-	       sqmatrix_invert(S1, 0, S2);  /* S1 = 1 / (YtKY) */
+	       CHECK(sqmatrix_invert(S1, 0, S2),
+		     "singular YtKY");  /* S1 = 1 / (YtKY) */
 	       evectmatrix_XtY(S2, X, Y, S3);  /* S2 = GtKY = (YtKG)t */
 	       sqmatrix_AeBC(S3, S2, 0 , S1, 1);
 	       evectmatrix_XpaYS(X, -1.0, G, S3, 1);
@@ -489,7 +553,7 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 
 	  d_scale = 1.0;
 
-	  /* Minimize the trace along Y + lamba*D: */
+	  /* Minimize the trace along Y + lambda*D: */
 
 	  if (!use_linmin) {
 	       real dE, E2, d2E, t, d_norm;
@@ -502,7 +566,9 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 	          This has the advantage of requiring two fewer O(np^2)
 	          matrix multiplications compared to the exact linmin. */
 
-	       d_norm = sqrt(SCALAR_RE(evectmatrix_traceXtY(D,D)) / Y.p);
+               if (B) B(D, BD, Bdata, 0, BD); /* B*Y; no scratch */
+               
+	       d_norm = sqrt(SCALAR_RE(evectmatrix_traceXtY(BD,D)) / Y.p);
 	       mpi_assert_equal(d_norm);
 
 	       /* dE = 2 * tr Gt D.  (Use prev_G instead of G so that
@@ -513,8 +579,14 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 	       t = dE < 0 ? -fabs(prev_theta) : fabs(prev_theta);
 	       evectmatrix_aXpbY(1.0, Y, t / d_norm, D);
 
-	       evectmatrix_XtX(U, Y, S2);
-	       sqmatrix_invert(U, 1, S2);  /* U = 1 / (Yt Y) */
+               if (B) {
+                   B(Y, BY, Bdata, 1, G); /* B*Y; G is scratch */
+                   evectmatrix_XtY(U, Y, BY, S2);
+               }
+               else
+                   evectmatrix_XtX(U, Y, S2);
+	       CHECK(sqmatrix_invert(U, 1, S2),
+		     "singular YtBY");  /* U = 1 / (Yt B Y) */
 	       A(Y, G, Adata, 1, X); /* G = AY; X is scratch */
 	       evectmatrix_XtY(S1, Y, G, S2);  /* S1 = Yt A Y */
 
@@ -567,28 +639,34 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 	  if (use_linmin) {
 	       real dE, d2E;
 
-	       d_scale = sqrt(SCALAR_RE(evectmatrix_traceXtY(D, D)) / Y.p);
+               if (B) B(D, BD, Bdata, 0, G); /* B*Y; G is scratch */
+               
+	       d_scale = sqrt(SCALAR_RE(evectmatrix_traceXtY(BD, D)) / Y.p);
 	       mpi_assert_equal(d_scale);
 	       blasglue_rscal(Y.p * Y.n, 1/d_scale, D.data, 1);
+	       if (B) blasglue_rscal(Y.p * Y.n, 1/d_scale, BD.data, 1);
 
 	       A(D, G, Adata, 0, X); /* G = A D; X is scratch */
-	       evectmatrix_XtX(DtD, D, S2);
+               if (B)
+                   evectmatrix_XtY(DtBD, D, BD, S2);
+               else
+                   evectmatrix_XtX(DtBD, D, S2);
 	       evectmatrix_XtY(DtAD, D, G, S2);
-	       sqmatrix_assert_hermitian(DtD);
+	       sqmatrix_assert_hermitian(DtBD);
 	       sqmatrix_assert_hermitian(DtAD);
 	       
-	       evectmatrix_XtY(S1, Y, D, S2);
-	       sqmatrix_symmetrize(symYtD, S1);
+	       evectmatrix_XtY(S1, Y, BD, S2);
+	       sqmatrix_symmetrize(symYtBD, S1);
 
 	       evectmatrix_XtY(S1, Y, G, S2);
 	       sqmatrix_symmetrize(symYtAD, S1);
 
-	       sqmatrix_AeBC(S1, U, 0, symYtD, 1);
+	       sqmatrix_AeBC(S1, U, 0, symYtBD, 1);
 	       dE = 2.0 * (SCALAR_RE(sqmatrix_traceAtB(U, symYtAD)) -
 			   SCALAR_RE(sqmatrix_traceAtB(YtAYU, S1)));
 
-	       sqmatrix_copy(S2, DtD);
-	       sqmatrix_ApaBC(S2, -4.0, symYtD, 0, S1, 0);
+	       sqmatrix_copy(S2, DtBD);
+	       sqmatrix_ApaBC(S2, -4.0, symYtBD, 0, S1, 0);
 	       sqmatrix_AeBC(S3, symYtAD, 0, S1, 0);
 	       sqmatrix_AeBC(S1, U, 0, S2, 1);
 	       d2E = 2.0 * (SCALAR_RE(sqmatrix_traceAtB(U, DtAD)) -
@@ -633,9 +711,9 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 		    theta = dE > 0 ? -fabs(prev_theta) : fabs(prev_theta);
 	       }
 
-	       /* Set S1 to YtAYU * YtY = YtAY for use in linmin.
+	       /* Set S1 to YtAYU * YtBY = YtAY for use in linmin.
 		  (tfd.YtAY == S1). */
-	       sqmatrix_AeBC(S1, YtAYU, 0, YtY, 1);
+	       sqmatrix_AeBC(S1, YtAYU, 0, YtBY, 1);
 	       sqmatrix_assert_hermitian(S1);
 
 	       mpi_assert_equal(theta);
@@ -684,9 +762,9 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 	       /* Sum the times over the processors so that all the
 		  processors compare the same, average times. */
 	       mpi_allreduce_1(&t_exact,
-			       real, SCALAR_MPI_TYPE, MPI_SUM, MPI_COMM_WORLD);
+			       real, SCALAR_MPI_TYPE, MPI_SUM, mpb_comm);
 	       mpi_allreduce_1(&t_approx, 
-			       real, SCALAR_MPI_TYPE, MPI_SUM, MPI_COMM_WORLD);
+			       real, SCALAR_MPI_TYPE, MPI_SUM, mpb_comm);
 
 	       if (!(flags & EIGS_FORCE_EXACT_LINMIN) &&
 		   linmin_improvement > 0 &&
@@ -713,8 +791,13 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
            STRINGIZE(EIGENSOLVER_MAX_ITERATIONS)
            " iterations");
 
-     evectmatrix_XtX(U, Y, S2);
-     sqmatrix_invert(U, 1, S2);
+     if (B) {
+         B(Y, BY, Bdata, 1, G); /* B*Y; G is scratch */
+         evectmatrix_XtY(U, Y, BY, S2);
+     }
+     else
+         evectmatrix_XtX(U, Y, S2);
+     CHECK(sqmatrix_invert(U, 1, S2), "singular YtBY at end");
      eigensolver_get_eigenvals_aux(Y, eigenvals, A, Adata,
 				   X, G, U, S1, S2);
 
@@ -723,10 +806,10 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
      destroy_sqmatrix(S3);
      destroy_sqmatrix(S2);
      destroy_sqmatrix(S1);
-     destroy_sqmatrix(symYtD);
-     destroy_sqmatrix(DtD);
+     destroy_sqmatrix(symYtBD);
+     destroy_sqmatrix(DtBD);
      destroy_sqmatrix(U);
-     destroy_sqmatrix(YtY);
+     destroy_sqmatrix(YtBY);
      destroy_sqmatrix(symYtAD);
      destroy_sqmatrix(DtAD);
      destroy_sqmatrix(YtAYU);
@@ -734,13 +817,14 @@ void eigensolver_lagrange(evectmatrix Y, real *eigenvals,
 
 void eigensolver(evectmatrix Y, real *eigenvals,
 		 evectoperator A, void *Adata,
+		 evectoperator B, void *Bdata,
 		 evectpreconditioner K, void *Kdata,
 		 evectconstraint constraint, void *constraint_data,
 		 evectmatrix Work[], int nWork,
 		 real tolerance, int *num_iterations,
 		 int flags)
 {
-     eigensolver_lagrange(Y, eigenvals, A, Adata, K, Kdata,
+     eigensolver_lagrange(Y, eigenvals, A, Adata, B, Bdata, K, Kdata,
 			  constraint, constraint_data,
 			  0, 0, 0,
 			  Work, nWork, tolerance, num_iterations, flags);

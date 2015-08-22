@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -136,7 +136,7 @@ maxwell_data *create_maxwell_data(int nx, int ny, int nz,
 #    endif
 
      fft_data_size = *alloc_N 
-	  = FFTW(mpi_local_size_transposed)(rank, np, MPI_COMM_WORLD,
+	  = FFTW(mpi_local_size_transposed)(rank, np, mpb_comm,
 					    &local_nx, &local_x_start,
 					    &local_ny, &local_y_start);
 #    ifndef SCALAR_COMPLEX
@@ -158,13 +158,13 @@ maxwell_data *create_maxwell_data(int nx, int ny, int nz,
      CHECK(rank > 1, "rank < 2 MPI computations are not supported");
 
 #    ifdef SCALAR_COMPLEX
-     d->iplans[0] = fftwnd_mpi_create_plan(MPI_COMM_WORLD, rank, n,
+     d->iplans[0] = fftwnd_mpi_create_plan(mpb_comm, rank, n,
 				       FFTW_FORWARD,
 				       FFTW_ESTIMATE | FFTW_IN_PLACE);
      {
 	  int nt[3]; /* transposed dimensions for reverse FFT */
 	  nt[0] = n[1]; nt[1] = n[0]; nt[2] = n[2]; 
-	  d->plans[0] = fftwnd_mpi_create_plan(MPI_COMM_WORLD, rank, nt,
+	  d->plans[0] = fftwnd_mpi_create_plan(mpb_comm, rank, nt,
 					   FFTW_BACKWARD,
 					   FFTW_ESTIMATE | FFTW_IN_PLACE);
      }
@@ -179,7 +179,7 @@ maxwell_data *create_maxwell_data(int nx, int ny, int nz,
 
      CHECK(rank > 1, "rank < 2 MPI computations are not supported");
 
-     d->iplans[0] = rfftwnd_mpi_create_plan(MPI_COMM_WORLD, rank, n,
+     d->iplans[0] = rfftwnd_mpi_create_plan(mpb_comm, rank, n,
 					FFTW_REAL_TO_COMPLEX,
 					FFTW_ESTIMATE | FFTW_IN_PLACE);
 
@@ -187,7 +187,7 @@ maxwell_data *create_maxwell_data(int nx, int ny, int nz,
 	the reverse transform here--we always pass the dimensions of the
 	original real array, and rfftwnd_mpi assumes that if one
 	transform is transposed, then the other is as well. */
-     d->plans[0] = rfftwnd_mpi_create_plan(MPI_COMM_WORLD, rank, n,
+     d->plans[0] = rfftwnd_mpi_create_plan(mpb_comm, rank, n,
 				       FFTW_COMPLEX_TO_REAL,
 				       FFTW_ESTIMATE | FFTW_IN_PLACE);
 
@@ -218,6 +218,7 @@ maxwell_data *create_maxwell_data(int nx, int ny, int nz,
 #endif
 
      CHK_MALLOC(d->eps_inv, symmetric_matrix, d->fft_output_size);
+     d->mu_inv = NULL;
 
      /* A scratch output array is required because the "ordinary" arrays
 	are not in a cartesian basis (or even a constant basis). */
@@ -235,6 +236,7 @@ maxwell_data *create_maxwell_data(int nx, int ny, int nz,
      CHK_MALLOC(d->k_plus_G_normsqr, real, *local_N);
 
      d->eps_inv_mean = 1.0;
+     d->mu_inv_mean = 1.0;
 
      d->local_N = *local_N;
      d->N_start = *N_start;
@@ -275,6 +277,7 @@ void destroy_maxwell_data(maxwell_data *d)
 	  }
 
 	  free(d->eps_inv);
+          if (d->mu_inv) free(d->mu_inv);
 #if defined(HAVE_FFTW3)
 	  FFTW(free)(d->fft_data);
 	  if (d->fft_data2 != d->fft_data)

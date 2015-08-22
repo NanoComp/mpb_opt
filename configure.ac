@@ -1,5 +1,5 @@
 # Process this file with autoconf to produce a configure script.
-AC_INIT(mpb, 1.5, stevenj@alum.mit.edu)
+AC_INIT(mpb, 1.6-dev, stevenj@alum.mit.edu)
 AC_CONFIG_SRCDIR([src/matrices/matrices.c])
 AC_CONFIG_HEADER([config.h src/mpbconf.h])
 AC_CONFIG_MACRO_DIR([m4])
@@ -8,9 +8,17 @@ AM_MAINTAINER_MODE
 # Shared-library version number; indicates api compatibility, and is
 # not the same as the "public" version number.  (Don't worry about this
 # except for public releases.)
-SHARED_VERSION_INFO="0:0:0"
+SHARED_VERSION_INFO="1:0:0"
 
-AM_INIT_AUTOMAKE([check-news color-tests parallel-tests silent-rules 1.11])
+# note: must be consistent with API version above
+VERSION_MAJOR=1
+VERSION_MINOR=6
+VERSION_PATCH=0
+AC_DEFINE_UNQUOTED(MPB_VERSION_MAJOR, [$VERSION_MAJOR], [major version])
+AC_DEFINE_UNQUOTED(MPB_VERSION_MINOR, [$VERSION_MINOR], [minor version])
+AC_DEFINE_UNQUOTED(MPB_VERSION_PATCH, [$VERSION_PATCH], [patch version])
+
+AM_INIT_AUTOMAKE([foreign check-news color-tests parallel-tests silent-rules 1.11])
 AM_SILENT_RULES(yes)
 AC_SUBST(SHARED_VERSION_INFO)
 AM_ENABLE_SHARED(no) dnl shared libs cause too many headaches to be default
@@ -20,6 +28,7 @@ AC_PROG_LIBTOOL
 MPB_VERSION=$PACKAGE_VERSION
 AC_SUBST(MPB_VERSION)
 AC_PROG_F77
+AC_PATH_PROG(PERL, perl perl5, $srcdir/missing)
 
 # Get C compiler.
 AC_MSG_CHECKING([for vendor cc to be used instead of gcc])
@@ -292,8 +301,12 @@ AC_CHECK_HEADERS([libguile.h guile/gh.h])
 
 AC_CHECK_FUNCS(scm_make_smob_type scm_array_get_handle scm_is_array)
 AC_MSG_CHECKING([for SCM_SMOB_PREDICATE])
-AC_TRY_LINK([#include <guile/gh.h>
-#include <libguile/smob.h>],
+AC_TRY_LINK([#if defined(HAVE_LIBGUILE_H)
+#  include <libguile.h>
+#else
+#  include <guile/gh.h>
+#  include <libguile/smob.h>
+#endif],
                     [int x; SCM_SMOB_PREDICATE(1,x);],
                     ok=yes, ok=no)
 AC_MSG_RESULT($ok)
@@ -301,8 +314,12 @@ if test $ok = yes; then
 	AC_DEFINE(HAVE_SCM_SMOB_PREDICATE, 1, [define if we have SCM_SMOB_PREDICATE])
 fi
 AC_MSG_CHECKING([for SCM_SMOB_DATA])
-AC_TRY_LINK([#include <guile/gh.h>
-#include <libguile/smob.h>],
+AC_TRY_LINK([#if defined(HAVE_LIBGUILE_H)
+#  include <libguile.h>
+#else
+#  include <guile/gh.h>
+#  include <libguile/smob.h>
+#endif],
                     [int x; SCM_SMOB_DATA(x);],
                     ok=yes, ok=no)
 AC_MSG_RESULT($ok)
@@ -310,8 +327,12 @@ if test $ok = yes; then
 	AC_DEFINE(HAVE_SCM_SMOB_DATA, 1, [define if we have SCM_SMOB_DATA])
 fi
 AC_MSG_CHECKING([for SCM_NEWSMOB])
-AC_TRY_LINK([#include <guile/gh.h>
-#include <libguile/smob.h>],
+AC_TRY_LINK([#if defined(HAVE_LIBGUILE_H)
+#  include <libguile.h>
+#else
+#  include <guile/gh.h>
+#  include <libguile/smob.h>
+#endif],
                     [int x; SCM_NEWSMOB(x,1,0);],
                     ok=yes, ok=no)
 AC_MSG_RESULT($ok)
@@ -388,7 +409,7 @@ AC_CHECK_HEADER(ctl.h, [CTL_H_CPPFLAG=" "], [
      AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <ctl.h>]],[])], [CTL_H_CPPFLAG=-I$ctl_h_path; break])
   done
   AC_MSG_RESULT([$CTL_H_CPPFLAG])
-  CPPFLAGS=$save_CPPFLAGS])
+  CPPFLAGS="$save_CPPFLAGS $CTL_H_CPPFLAG"])
 if test "x$CTL_H_CPPFLAG" = "x"; then
   AC_MSG_ERROR([Couldn't find the ctl.h header file for libctl.])
 fi

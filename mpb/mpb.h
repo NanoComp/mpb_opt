@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -79,7 +79,7 @@ extern int kpoint_index;
 /* in fields.c */
 extern void compute_field_squared(void);
 void get_efield(integer which_band);
-real mean_epsilon_from_matrix(const symmetric_matrix *eps_inv);
+real mean_medium_from_matrix(const symmetric_matrix *eps_inv);
 
 /**************************************************************************/
 

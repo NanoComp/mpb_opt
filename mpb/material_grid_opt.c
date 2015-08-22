@@ -1,4 +1,4 @@
-/* Copyright (C) 1999-2012, Massachusetts Institute of Technology.
+/* Copyright (C) 1999-2014 Massachusetts Institute of Technology.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -102,7 +102,7 @@ static double band_constraint(int n, const double *u, double *grad, void *data)
      }
      if (grad) /* gradient w.r.t. epsilon needs to be summed over processes */
 	  mpi_allreduce(work, grad, n-2, double, MPI_DOUBLE, 
-			MPI_SUM, MPI_COMM_WORLD);
+			MPI_SUM, mpb_comm);
 
      return val;
 }
