@@ -31,6 +31,9 @@ MPI_Comm mpb_comm = MPI_COMM_WORLD;
 int mpb_comm = 0;
 #endif
 
+mpb_numgroups = 1;
+mpb_mygroup = 0;
+
 /* Simple, somewhat hackish API to allow user to run multiple simulations
    in parallel in the same MPI job.  The user calls
 

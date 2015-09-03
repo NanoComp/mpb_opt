@@ -158,6 +158,9 @@
 
 (define-external-function using-mu? false false 'boolean)
 
+(define-external-function num-proc-per-k false false 
+  no-return-value 'integer)
+
 ; (set-parity p) changes the parity that is solved for by
 ; solve-kpoint, below.  p should be one of the following constants
 ; init-params should already have been called.  Be sure to call

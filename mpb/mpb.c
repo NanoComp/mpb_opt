@@ -367,6 +367,18 @@ void set_parity(integer p)
 }
 
 /**************************************************************************/
+/* before the initialization, we can divide the processes with processes per k specified*/
+void num_proc_per_k(integer processes_per_k)
+{
+  int rank, sz;
+  MPI_Comm_rank(mpb_comm, &rank);
+  MPI_Comm_size(mpb_comm, &sz);
+
+  mpb_numgroups = sz/processes_per_k;
+  mpb_mygroup = divide_parallel_processes(mpb_numgroups);
+
+}
+
 
 /* Guile-callable function: init-params, which initializes any data
    that we need for the eigenvalue calculation.  When this function

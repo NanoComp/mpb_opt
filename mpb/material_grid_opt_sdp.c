@@ -499,6 +499,22 @@ void buildSymmatTriplet(scalar_complex *Asp, double *bara_v, int spdim)
 	}
     }
 }
+
+
+
+void split_k(int nk, int *kidx_start, int *kidx_end) {
+  if (mpb_mygroup < (nk % mpb_numgroups)){
+    *kidx_start = (nk/mpb_numgroups + 1) * mpb_mygroup;
+    *kidx_end = (nk/mpb_numgroups + 1) * (mpb_mygroup+1);
+  }
+  else {
+    *kidx_start = (nk/mpb_numgroups) * mpb_mygroup + nk%mpb_numgroups;
+    *kidx_end = (nk/mpb_numgroups) * (mpb_mygroup+1) + nk%mpb_numgroups;
+  }
+  if (mpb_mygroup == (mpb_numgroups -1))
+    *kidx_end = nk;
+   
+}
  
 /*******************************************************************************/
 number run_matgrid_optgap_mosek(vector3_list kpoints,
@@ -554,16 +570,25 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
   
   /**************/
   
-  int rank;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  
+  int rank, sz;
+  MPI_Comm_rank(mpb_comm, &rank);
+  MPI_Comm_size(mpb_comm, &sz);
+
+  printf("rank = %d\n", rank);
+
   nk = kpoints.num_items;
+ 
+  int processes_per_k=2;
+
+  printf("my group: %d, numgroups: %d\n", mpb_mygroup, mpb_numgroups);
+
   grids = get_material_grids(geometry, &ngrids);
+
   ntot = material_grids_ntot(grids, ngrids);
   
   /* u = [ubar_1, ubar_2, ... , ubar_ntot, theta, lambda_l, lambda_u] */
   n = ntot + 3;
-  mpi_one_printf("number of decision variable n = %d\n",n);
+  mpi_one_printf("number of decision variable n = %d \n",n);
   u = (double *) malloc(sizeof(double) * n);
   
   /* storing the dimensions of the lower and upper subspaces for each k */
@@ -572,8 +597,7 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
   
   gap = (double *) malloc(sizeof(double) * maxrun);
   obj = (double *) malloc(sizeof(double) * maxrun);
-  
-  
+    
   eigenvalues = (double *) malloc(sizeof(double) * num_bands);
   
   Altemp = (scalar_complex *) malloc(sizeof(scalar_complex) * band1*(band1+1)/2*n);
@@ -584,8 +608,9 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
   N = mdata->fft_output_size;
   depsdu = (double *) calloc(ntot*N, sizeof(double));
   deps_du(depsdu, 1.0, grids, ngrids);
-  
-  
+
+  mpi_one_printf("nx = %d, ny = %d, nz = %d\n", mdata->nx, mdata->ny, mdata->nz);
+
   maxspdim = MAX2(band1,num_bands-band2+1)*2;
   bara_i = (MSKint32t *) malloc(sizeof(MSKint32t)*maxspdim*(maxspdim+1)/2);
   bara_j = (MSKint32t *) malloc(sizeof(MSKint32t)*maxspdim*(maxspdim+1)/2);
@@ -606,11 +631,10 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
 
   while (irun < maxrun & usum >= utol)
     {
-
       mpi_one_printf("\n opt step irun = %d \n \n", irun);
       
       /*************************************************/
-      if ( r==MSK_RES_OK)  /* && rank==optRank) */
+      if ( r==MSK_RES_OK )
         {
           r = MSK_maketask(env,NUMCON,0,&task);      
       
@@ -627,40 +651,37 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
           for (j=0; j<NUMVAR-1 && r==MSK_RES_OK; ++j)
             r = MSK_putvarbound( task,j,MSK_BK_UP,-MSK_INFINITY,0.0);
           r = MSK_putvarbound( task,NUMVAR-1,MSK_BK_FR,-MSK_INFINITY,MSK_INFINITY); 
-         
-          
           /* l^c = u^c = b = [0;0;...0;-2,2]; max: b^t*y = b^t*(s_l^c - s_u^c) */
-	    for(i=0; i<NUMCON-2 && r==MSK_RES_OK; ++i)
-	      r = MSK_putconbound(task, i, MSK_BK_FX, 0.0, 0.0);
-	    r = MSK_putconbound(task, NUMCON-2, MSK_BK_FX, -2.0, -2.0);
-	    r = MSK_putconbound(task, NUMCON-1, MSK_BK_FX, 2.0, 2.0);
-            
-            
-	    for (i=0; i<ntot && r==MSK_RES_OK; ++i)
-	      { 
-		asub[0]  = 2*i;
-		asub[1] = 2*i+1;
-		r = MSK_putarow(task, i, 2, asub, a1val);
-	      }
-            
-	    for (j=0; j<ntot+1; ++j)
-	      {
-		asub2[j] = 2*j;
-		a2val[j] = 1.0;
-	      }
-	    if (r== MSK_RES_OK)
-	      r = MSK_putarow(task, ntot, ntot+1, asub2, a2val);
-            
-	    asub[0] = ntot+1;
-	    asub[1] = ntot+2;
-	    if ( r ==MSK_RES_OK )
-	      r = MSK_putacol(task, 2*ntot+1, 1, asub, a3val);
-            
-	    if ( r ==MSK_RES_OK )
-	      r = MSK_putacol(task, 2*ntot+2, 1, asub+1, a3val);
-            
-	    if ( r ==MSK_RES_OK )
-	      r = MSK_putacol(task, 2*ntot+3, 2, asub, a3val);
+          for(i=0; i<NUMCON-2 && r==MSK_RES_OK; ++i)
+            r = MSK_putconbound(task, i, MSK_BK_FX, 0.0, 0.0);
+          r = MSK_putconbound(task, NUMCON-2, MSK_BK_FX, -2.0, -2.0);
+          r = MSK_putconbound(task, NUMCON-1, MSK_BK_FX, 2.0, 2.0);
+
+          for (i=0; i<ntot && r==MSK_RES_OK; ++i)
+            { 
+              asub[0]  = 2*i;
+              asub[1] = 2*i+1;
+              r = MSK_putarow(task, i, 2, asub, a1val);
+            }
+          
+          for (j=0; j<ntot+1; ++j)
+            {
+              asub2[j] = 2*j;
+              a2val[j] = 1.0;
+            }
+          if (r== MSK_RES_OK)
+            r = MSK_putarow(task, ntot, ntot+1, asub2, a2val);
+          
+          asub[0] = ntot+1;
+          asub[1] = ntot+2;
+          if ( r ==MSK_RES_OK )
+            r = MSK_putacol(task, 2*ntot+1, 1, asub, a3val);
+          
+          if ( r ==MSK_RES_OK )
+            r = MSK_putacol(task, 2*ntot+2, 1, asub+1, a3val);
+          
+          if ( r ==MSK_RES_OK )
+            r = MSK_putacol(task, 2*ntot+3, 2, asub, a3val);
         }
       /********************************************************/
       
@@ -670,18 +691,22 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
       omega_u = 100;
       
       material_grids_get(u, grids, ngrids);
-
-      mpi_one_printf("number of k points is %d \n", nk);
       
-      for (k = 0; k < nk; ++k) {
-        barvarList[2*k] = 2*k;
-        barvarList[2*k+1] = 2*k+1;
-        
-        
+      mpi_one_printf("number of k points is %d \n", nk);
+
+      double t1;      
+      
+      int kidx_start, kidx_end;
+
+      split_k(nk, &kidx_start, &kidx_end);
+
+      printf("mygroup = %d, numgroups = %d, kidx_start = %d, kidx_end = %d\n", mpb_mygroup, mpb_numgroups, kidx_start, kidx_end);
+
+      for (k = kidx_start; k < kidx_end; ++k) {
         
         randomize_fields();
         solve_kpoint(kpoints.items[k]);
-        
+
         for (j = 0; j < num_bands; ++j)
           eigenvalues[j]  = freqs.items[j]*freqs.items[j];
         
@@ -711,13 +736,15 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
         scale = 1;
         count = 0; count1 = 0;
         stride = (nl[k]+1)*nl[k]/2;
+
+        /* this for loop takes much time*/
         for (ridx = 0; ridx < nl[k]; ++ridx)
           {
             rband = band1-nl[k]+1+ridx;
             for (cidx = 0; cidx <= ridx; ++cidx)
               {
                 cband = band1-nl[k]+1+cidx;
-                
+            
                 material_grids_SPt(Altemp+count, depsdu, u, -scale, ntot, rband, cband, stride);
                 CASSIGN_SCALAR(Altemp[count+(n-2)*stride],(rband==cband)? 1:0.0, 0.0);
                 CASSIGN_SCALAR(Altemp[count+(n-1)*stride], 0.0, 0.0);
@@ -733,7 +760,6 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
                 ++count;
               }
           }
-        
 
         if ( r == MSK_RES_OK )
           { asub[0] = 2*nl[k];
@@ -743,24 +769,25 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
         for(i=0; i<n && r==MSK_RES_OK; ++i)
           {
             buildSymmatTriplet(Altemp+stride*i, bara_v, nl[k]);
+
             if ( r==MSK_RES_OK )
               r = MSK_appendsparsesymmat(task, 2*nl[k], nl[k]*(2*nl[k]+1), bara_i, bara_j, bara_v, &idx);
             if ( r==MSK_RES_OK )
               r = MSK_putbaraij(task, i, 2*k, 1, &idx, &falpha);
           }
-
-
         
-          count = 0; count1 = 0;
-          stride = (nu[k]+1)*nu[k]/2;
+        
+        count = 0; count1 = 0;
+        stride = (nu[k]+1)*nu[k]/2;
           for (ridx = 0; ridx < nu[k]; ++ridx)
             {
               rband = band2+ridx;
               for (cidx = 0; cidx <= ridx; ++cidx)
                 {
                   cband = band2+cidx;
+
                   material_grids_SPt(Autemp+count, depsdu, u, scale, ntot, rband, cband, stride);
-                  
+
                   CASSIGN_SCALAR(Autemp[count+stride*(n-2)], 0.0, 0.0);
                   CASSIGN_SCALAR(Autemp[count+stride*(n-1)],(rband==cband)? -1:0.0, 0.0);
                   
@@ -775,7 +802,9 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
                   ++count;
                 }
             }
-          
+
+          printf("check here 1\n");
+
           /* if (rank==optRank) */
           /*   { */
           if ( r == MSK_RES_OK )
@@ -811,7 +840,8 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
           mpi_one_printf("start msk optimitization\n");
           
           /* Run optimizer */
-          r = MSK_optimizetrm(task,&trmcode);
+          if(rank==0)
+            r = MSK_optimizetrm(task,&trmcode);
           
           mpi_one_printf("msk optimitization done\n");
           MSK_solutionsummary (task,MSK_STREAM_MSG);

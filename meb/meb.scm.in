@@ -92,6 +92,8 @@
 (define-external-function init-params true false
   no-return-value 'integer 'boolean)
 
+(define-external-function divide-processes false false 
+  no-return-value 'integer)
 ; (set-parity p) changes the parity that is solved for by
 ; solve-kpoint, below.  p should be one of the following constants
 ; init-params should already have been called.  Be sure to call

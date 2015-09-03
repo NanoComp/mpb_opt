@@ -27,6 +27,9 @@ extern MPI_Comm mpb_comm;
 extern int mpb_comm;
 #endif
 
+extern int mpb_mygroup;
+extern int mpb_numgroups;
+
 extern void end_divide_parallel(void);
 extern int divide_parallel_processes(int numgroups);
 extern void begin_global_communications(void);

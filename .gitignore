@@ -75,3 +75,6 @@ tests/maxwell_test.out
 
 examples/*.h5
 examples/*.png
+
+examples/example_scm_c/*
+examples/[1-9]*

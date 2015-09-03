@@ -161,7 +161,7 @@ material_grid *get_material_grids(geometric_object_list g, int *ngrids)
 		    break;
 	  if (j == *ngrids) {
 	       if (j >= nalloc) {
-		    nalloc = nalloc * 2 + 1;
+                 nalloc = nalloc * 2 + 1;
 		    grids = realloc(grids, sizeof(material_grid) * nalloc);
 	       }
 	       grids[j] = *default_material.subclass.material_grid_data;
@@ -174,8 +174,10 @@ material_grid *get_material_grids(geometric_object_list g, int *ngrids)
 int material_grids_ntot(const material_grid *grids, int ngrids)
 {
      int i, ntot = 0;
-     for (i = 0; i < ngrids; ++i)
-	  ntot += grids[i].size.x * grids[i].size.y * grids[i].size.z;
+
+     for (i = 0; i < ngrids; ++i){
+       ntot += grids[i].size.x * grids[i].size.y * grids[i].size.z;
+     }
      return ntot;
 }
 
@@ -1280,7 +1282,7 @@ void material_grids_match_epsilon_fileB(string filename, number eps_tol)
      }
 
      int process;
-     MPI_Comm_rank(MPI_COMM_WORLD, &process);
+     MPI_Comm_rank(mpb_comm, &process);
 #if defined(HAVE_NLOPT_H) && defined(HAVE_NLOPT)
      {
 	  nlopt_result res;
