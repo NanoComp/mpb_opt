@@ -190,43 +190,43 @@ void init_epsilon(void)
 
      mpi_one_printf("Geometric objects:\n");
      if (mpi_is_master())
-	  for (i = 0; i < geometry.num_items; ++i) {
-	       display_geometric_object_info(5, geometry.items[i]);
-	       
-	       if (geometry.items[i].material.which_subclass == MEDIUM)
-		    printf("%*sepsilon = %g, mu = %g\n",
-			   5 + 5, "",
-			   geometry.items[i].material.
-			   subclass.medium_data->epsilon,
-			   geometry.items[i].material.
-			   subclass.medium_data->mu);
-	  }
+       for (i = 0; i < geometry.num_items; ++i) {
+         display_geometric_object_info(5, geometry.items[i]);
+
+         if (geometry.items[i].material.which_subclass == MEDIUM)
+           printf("%*sepsilon = %g, mu = %g\n",
+                  5 + 5, "",
+                  geometry.items[i].material.
+                  subclass.medium_data->epsilon,
+                  geometry.items[i].material.
+                  subclass.medium_data->mu);
+       }
 
      destroy_geom_box_tree(geometry_tree);  /* destroy any tree from
 					       previous runs */
      {
-	  geom_box b0;
-	  b0.low = vector3_plus(geometry_center,
-				vector3_scale(-0.5, geometry_lattice.size));
-	  b0.high = vector3_plus(geometry_center,
-				 vector3_scale(0.5, geometry_lattice.size));
+       geom_box b0;
+       b0.low = vector3_plus(geometry_center,
+                             vector3_scale(-0.5, geometry_lattice.size));
+       b0.high = vector3_plus(geometry_center,
+                              vector3_scale(0.5, geometry_lattice.size));
 	  /* pad tree boundaries to allow for sub-pixel averaging */
-	  b0.low.x -= geometry_lattice.size.x / mdata->nx;
-	  b0.low.y -= geometry_lattice.size.y / mdata->ny;
-	  b0.low.z -= geometry_lattice.size.z / mdata->nz;
-	  b0.high.x += geometry_lattice.size.x / mdata->nx;
-	  b0.high.y += geometry_lattice.size.y / mdata->ny;
-	  b0.high.z += geometry_lattice.size.z / mdata->nz;
-	  geometry_tree = create_geom_box_tree0(geometry, b0);
+       b0.low.x -= geometry_lattice.size.x / mdata->nx;
+       b0.low.y -= geometry_lattice.size.y / mdata->ny;
+       b0.low.z -= geometry_lattice.size.z / mdata->nz;
+       b0.high.x += geometry_lattice.size.x / mdata->nx;
+       b0.high.y += geometry_lattice.size.y / mdata->ny;
+       b0.high.z += geometry_lattice.size.z / mdata->nz;
+       geometry_tree = create_geom_box_tree0(geometry, b0);
      }
      if (verbose && mpi_is_master()) {
-	  printf("Geometry object bounding box tree:\n");
-	  display_geom_box_tree(5, geometry_tree);
+       printf("Geometry object bounding box tree:\n");
+       display_geom_box_tree(5, geometry_tree);
      }
      geom_box_tree_stats(geometry_tree, &tree_depth, &tree_nobjects);
      mpi_one_printf("Geometric object tree has depth %d and %d object nodes"
-	    " (vs. %d actual objects)\n",
-	    tree_depth, tree_nobjects, geometry.num_items);
+                    " (vs. %d actual objects)\n",
+                    tree_depth, tree_nobjects, geometry.num_items);
 
      reset_epsilon();
 }

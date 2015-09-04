@@ -334,9 +334,9 @@ static scalar_complex compute_fields_energy(scalar_complex *field1, scalar_compl
   }
   
   mpi_allreduce_1(&energy_sum.re, real, SCALAR_MPI_TYPE,
-                  MPI_SUM, MPI_COMM_WORLD);
+                  MPI_SUM, mpb_comm);
   mpi_allreduce_1(&energy_sum.im, real, SCALAR_MPI_TYPE,
-                  MPI_SUM, MPI_COMM_WORLD);
+                  MPI_SUM, mpb_comm);
   return energy_sum;
 }
 
@@ -397,8 +397,8 @@ static void material_grids_SPt(scalar_complex *Asp, const double *depsdu, const 
       /* field1, field2, and despdu (of size fft_output_size = nx*local_y*nz) only have the local block of data, and their products 
          should be summed up (mpi_reduce) to account for global info. local_ny ~= ny/mpi_comm_size */
       
-      mpi_allreduce_1(&Asp[ui*stride].re, real, SCALAR_MPI_TYPE, MPI_SUM, MPI_COMM_WORLD);
-      mpi_allreduce_1(&Asp[ui*stride].im, real, SCALAR_MPI_TYPE, MPI_SUM, MPI_COMM_WORLD);
+      mpi_allreduce_1(&Asp[ui*stride].re, real, SCALAR_MPI_TYPE, MPI_SUM, mpb_comm);
+      mpi_allreduce_1(&Asp[ui*stride].im, real, SCALAR_MPI_TYPE, MPI_SUM, mpb_comm);
       
     }
   
@@ -432,11 +432,9 @@ static int find(const double *v, double scalev, double shiftval, int pos, const 
       }
     }
   if(idx>=0 || (idx < 0 && pos ==-1)){ /* idx = -1; */
-    /* mpi_one_printf("find return case 1: %d\n", idx); */
     return idx;
   }
   else{ /* can't find anything positive, return the last index */
-        /* mpi_one_printf("find return case 2: %d\n", n); */
     return n;
   }
 }
@@ -576,10 +574,13 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
 
   printf("rank = %d\n", rank);
 
+  int global_rank, global_size, local_rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &global_rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &global_size);
+  MPI_Comm_rank(mpb_comm, &local_rank);
+
   nk = kpoints.num_items;
  
-  int processes_per_k=2;
-
   printf("my group: %d, numgroups: %d\n", mpb_mygroup, mpb_numgroups);
 
   grids = get_material_grids(geometry, &ngrids);
@@ -612,9 +613,34 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
   mpi_one_printf("nx = %d, ny = %d, nz = %d\n", mdata->nx, mdata->ny, mdata->nz);
 
   maxspdim = MAX2(band1,num_bands-band2+1)*2;
-  bara_i = (MSKint32t *) malloc(sizeof(MSKint32t)*maxspdim*(maxspdim+1)/2);
-  bara_j = (MSKint32t *) malloc(sizeof(MSKint32t)*maxspdim*(maxspdim+1)/2);
-  bara_v = (double *) calloc(maxspdim*(maxspdim+1)/2, sizeof(double));
+
+  int tmp;
+
+  int bara_dim; 
+  bara_dim = maxspdim*(maxspdim+1)/2;  
+
+  bara_i = (MSKint32t *) malloc(sizeof(MSKint32t)*bara_dim);
+  bara_j = (MSKint32t *) malloc(sizeof(MSKint32t)*bara_dim);
+  bara_v = (double *) calloc(bara_dim, sizeof(double));
+  
+  MSKint32t *baral_i,*baral_j, *barau_i, *barau_j;
+  double *baral_v, *barau_v;
+  baral_i = (MSKint32t *) malloc(sizeof(MSKint32t)*bara_dim);
+  baral_j = (MSKint32t *) malloc(sizeof(MSKint32t)*bara_dim);
+  baral_v = (double *) calloc(bara_dim, sizeof(double));
+  
+  barau_i = (MSKint32t *) malloc(sizeof(MSKint32t)*bara_dim);
+  barau_j = (MSKint32t *) malloc(sizeof(MSKint32t)*bara_dim);
+  barau_v = (double *) calloc(bara_dim, sizeof(double));
+    
+  int *recv_nl, *recv_nu, *recv_k;
+  int *recv_rank;
+  recv_nl = (int *) malloc(sizeof(int) * mpb_numgroups);
+  recv_nu = (int *) malloc(sizeof(int) * mpb_numgroups);
+  recv_k = (int *) malloc(sizeof(int) * mpb_numgroups);
+  recv_rank = (int *) malloc(sizeof(int) * mpb_numgroups);
+  
+  MPI_Status status;
   
   a2val = (double *) malloc(sizeof(double)*(ntot+1));
   
@@ -698,18 +724,17 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
       
       int kidx_start, kidx_end;
 
-      split_k(nk, &kidx_start, &kidx_end);
+      //      split_k(nk, &kidx_start, &kidx_end);
 
-      printf("mygroup = %d, numgroups = %d, kidx_start = %d, kidx_end = %d\n", mpb_mygroup, mpb_numgroups, kidx_start, kidx_end);
+      for (k = mpb_mygroup; k < nk; k+=mpb_numgroups) {
 
-      for (k = kidx_start; k < kidx_end; ++k) {
-        
         randomize_fields();
         solve_kpoint(kpoints.items[k]);
 
+        MPI_Barrier(MPI_COMM_WORLD);
+        
         for (j = 0; j < num_bands; ++j)
           eigenvalues[j]  = freqs.items[j]*freqs.items[j];
-        
         
         /* lambda_l and lambda_u updated at each k, only used outside the "for" loop for k */
         lambda_l = MAX2(eigenvalues[band1-1], lambda_l);
@@ -717,7 +742,6 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
         
         omega_l = MAX2(freqs.items[band1-1], omega_l);
         omega_u = MIN2(freqs.items[band2-1], omega_u);
-        
         
         /* find(const double *v, double scalev, double shiftval, int pos, const int n) */
         nltmpt = (band1-1) - find(eigenvalues,-1,eigenvalues[band1-1]*(1-lowtol),-1,num_bands);
@@ -727,12 +751,53 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
         nu[k] = nutmpt>=1 ? nutmpt : nutmpt+1;
         
         mpi_one_printf("nl[%d] = %d, nu[%d] = %d\n",k,nl[k],k,nu[k]);
+        /* then send nl[k] to global rank = 0 */
+
+        MPI_Barrier(MPI_COMM_WORLD);
+        printf("\n start of comm ..\n");
+
+        if(global_rank == 0) {
+          asub[0] = 2*nl[k];
+          r = MSK_appendbarvars(task, 1, asub);
+          asub[0] = 2*nu[k];
+          r = MSK_appendbarvars(task, 1, asub);
+        }
         
+        for(i = 1; i < mpb_numgroups; i++) {
+
+          if (mpb_mygroup == i && local_rank == 0) {
+            mpi_one_printf("start send from rank %d\n", i);
+            MPI_Send(&nl[k], 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
+            MPI_Send(&nu[k], 1, MPI_INT, 0, 2, MPI_COMM_WORLD);
+            MPI_Send(&k, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
+            mpi_one_printf("end send from rank %d\n", i);
+          }
+          
+          if (global_rank == 0){
+            if( i < global_size % mpb_numgroups)
+              recv_rank[i] = global_size/mpb_numgroups * i + i;
+            else
+              recv_rank[i] = global_size/mpb_numgroups * i + global_size % mpb_numgroups;
+            mpi_one_printf("start recv from rank %d\n", recv_rank[i]);
+            MPI_Recv(&recv_nl[i], 1, MPI_INT, recv_rank[i], 1, MPI_COMM_WORLD, &status);
+            MPI_Recv(&recv_nu[i], 1, MPI_INT, recv_rank[i], 2, MPI_COMM_WORLD, &status);
+            MPI_Recv(&recv_k[i], 1, MPI_INT, recv_rank[i], 3, MPI_COMM_WORLD, &status);
+
+            tmp = recv_nl[i] * 2;
+            r = MSK_appendbarvars(task, 1, &tmp);
+            tmp = recv_nu[i] * 2;
+            r = MSK_appendbarvars(task, 1, &tmp);
+            mpi_one_printf("end recv from rank %d\n", i);
+          }
+          MPI_Barrier(MPI_COMM_WORLD);
+        }
+        
+        printf("\n end of comm ..\n");
+
         /* fill the reduced gradient matrices into a temporary block diagonal matrix, */
         /* except the vectorized blocks are arranged side by side: [vec[block1] vec[block2] ... vec[blockn], vec[block1]*u[1] + ...+ vec[blockn]*u[n]],  */
         /* instead of diagonally. */
-
-
+        
         scale = 1;
         count = 0; count1 = 0;
         stride = (nl[k]+1)*nl[k]/2;
@@ -743,106 +808,131 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
             rband = band1-nl[k]+1+ridx;
             for (cidx = 0; cidx <= ridx; ++cidx)
               {
+
                 cband = band1-nl[k]+1+cidx;
-            
                 material_grids_SPt(Altemp+count, depsdu, u, -scale, ntot, rband, cband, stride);
                 CASSIGN_SCALAR(Altemp[count+(n-2)*stride],(rband==cband)? 1:0.0, 0.0);
                 CASSIGN_SCALAR(Altemp[count+(n-1)*stride], 0.0, 0.0);
-                
-                bara_i[count] = ridx; bara_j[count] = cidx;
-                bara_i[count+stride] = ridx+nl[k]; bara_j[count+stride] = cidx+nl[k];
-                bara_i[count+stride*2] = ridx+nl[k]; bara_j[count+stride*2] = cidx;
+
+                bara_i[count] = ridx; 
+                bara_j[count] = cidx;
+                bara_i[count+stride] = ridx+nl[k];
+                bara_j[count+stride] = cidx+nl[k];
+                bara_i[count+stride*2] = ridx+nl[k]; 
+                bara_j[count+stride*2] = cidx;
+
                 if (ridx!=cidx){
-                  bara_i[count1+stride*3] = cidx+nl[k]; bara_j[count1+stride*3] = ridx;
+                  bara_i[count1+stride*3] = cidx+nl[k]; 
+                  bara_j[count1+stride*3] = ridx;
                   ++count1;
                 }
-                
                 ++count;
               }
           }
 
-        if ( r == MSK_RES_OK )
-          { asub[0] = 2*nl[k];
-            r = MSK_appendbarvars(task, 1, asub);
-          }
-        
-        for(i=0; i<n && r==MSK_RES_OK; ++i)
-          {
-            buildSymmatTriplet(Altemp+stride*i, bara_v, nl[k]);
-
-            if ( r==MSK_RES_OK )
+        for(j=0; j<n; ++j) {
+            buildSymmatTriplet(Altemp+stride*j, bara_v, nl[k]);
+            /* first append baraij in rank 0*/
+            if(global_rank==0) {
               r = MSK_appendsparsesymmat(task, 2*nl[k], nl[k]*(2*nl[k]+1), bara_i, bara_j, bara_v, &idx);
-            if ( r==MSK_RES_OK )
-              r = MSK_putbaraij(task, i, 2*k, 1, &idx, &falpha);
-          }
-        
-        
+              r = MSK_putbaraij(task, j, 2*k, 1, &idx, &falpha);
+            }
+
+            /* send bara_i, bara_j, bara_v, and fill up nl part */
+            
+            for(i = 1; i < mpb_numgroups; i++) {
+              if (mpb_mygroup == i && local_rank == 0) {
+                MPI_Send(bara_i, bara_dim, MPI_INT, 0, 1, MPI_COMM_WORLD);
+                MPI_Send(bara_j, bara_dim, MPI_INT, 0, 2, MPI_COMM_WORLD);
+                MPI_Send(bara_v, bara_dim, MPI_DOUBLE, 0, 3, MPI_COMM_WORLD);
+              }
+              
+              if (global_rank == 0){                
+                MPI_Recv(baral_i, bara_dim, MPI_INT, recv_rank[i], 1, MPI_COMM_WORLD, &status);           
+                MPI_Recv(baral_j, bara_dim, MPI_INT, recv_rank[i], 2, MPI_COMM_WORLD, &status);       
+                MPI_Recv(baral_v, bara_dim, MPI_DOUBLE, recv_rank[i], 3, MPI_COMM_WORLD, &status);
+
+                r = MSK_appendsparsesymmat(task, 2*recv_nl[i], recv_nl[i]*(2*recv_nl[i]+1), baral_i, baral_j, baral_v, &idx);
+                r = MSK_putbaraij(task, j, 2*recv_k[i], 1, &idx, &falpha);
+              }
+              MPI_Barrier(MPI_COMM_WORLD);
+            }
+            
+        }
+
+        /*pass nl[k] value to proc 0; appendbarvars in proc 0; pass bara_i, bara_j, bara_v to proc 0; append spase matrix and put bar aij in proc 0*/
+      
         count = 0; count1 = 0;
         stride = (nu[k]+1)*nu[k]/2;
-          for (ridx = 0; ridx < nu[k]; ++ridx)
-            {
-              rband = band2+ridx;
-              for (cidx = 0; cidx <= ridx; ++cidx)
-                {
-                  cband = band2+cidx;
-
-                  material_grids_SPt(Autemp+count, depsdu, u, scale, ntot, rband, cband, stride);
-
-                  CASSIGN_SCALAR(Autemp[count+stride*(n-2)], 0.0, 0.0);
-                  CASSIGN_SCALAR(Autemp[count+stride*(n-1)],(rband==cband)? -1:0.0, 0.0);
-                  
-                  bara_i[count] = ridx; bara_j[count] = cidx;
-                  bara_i[count+stride] = ridx+nu[k]; bara_j[count+stride] = cidx+nu[k];
-                  bara_i[count+stride*2] = ridx+nu[k]; bara_j[count+stride*2] = cidx;
-                  if (ridx!=cidx)
-                    {
-                      bara_i[count1+stride*3] = cidx+nu[k]; bara_j[count1+stride*3] = ridx;
-                      ++count1;
-                    }
-                  ++count;
-                }
-            }
-
-          printf("check here 1\n");
-
-          /* if (rank==optRank) */
-          /*   { */
-          if ( r == MSK_RES_OK )
-            { asub[0] = 2*nu[k];
-              r = MSK_appendbarvars(task, 1, asub);
-            }
+        for (ridx = 0; ridx < nu[k]; ++ridx)
+          {
+            rband = band2+ridx;
+            for (cidx = 0; cidx <= ridx; ++cidx)
+              {
+                cband = band2+cidx;
+                
+                material_grids_SPt(Autemp+count, depsdu, u, scale, ntot, rband, cband, stride);
+                
+                CASSIGN_SCALAR(Autemp[count+stride*(n-2)], 0.0, 0.0);
+                CASSIGN_SCALAR(Autemp[count+stride*(n-1)],(rband==cband)? -1:0.0, 0.0);
+                
+                bara_i[count] = ridx; bara_j[count] = cidx;
+                bara_i[count+stride] = ridx+nu[k]; bara_j[count+stride] = cidx+nu[k];
+                bara_i[count+stride*2] = ridx+nu[k]; bara_j[count+stride*2] = cidx;
+                if (ridx!=cidx)
+                  {
+                    bara_i[count1+stride*3] = cidx+nu[k]; bara_j[count1+stride*3] = ridx;
+                    ++count1;
+                  }
+                ++count;
+              }
+          }
+        printf("finishing put bar aij\n");
+        for(j=0; j<n; ++j) {
+          buildSymmatTriplet(Autemp+stride*j, bara_v, nu[k]);
           
-          for(i=0; i<n && r==MSK_RES_OK; ++i)
-            {
-              buildSymmatTriplet(Autemp+stride*i, bara_v, nu[k]);
-              if ( r==MSK_RES_OK )
-                r = MSK_appendsparsesymmat(task, 2*nu[k], nu[k]*(2*nu[k]+1), bara_i, bara_j, bara_v, &idx);
-              if ( r==MSK_RES_OK )
-                r = MSK_putbaraij(task, i, 2*k+1, 1, &idx, &falpha);
+          if(global_rank==0) {
+            r = MSK_appendsparsesymmat(task, 2*nu[k], nu[k]*(2*nu[k]+1), bara_i, bara_j, bara_v, &idx);
+            r = MSK_putbaraij(task, j, 2*k+1, 1, &idx, &falpha);
+          }
+
+          for(i = 1; i < mpb_numgroups; i++) {
+            if (mpb_mygroup == i && local_rank == 0) {
+              MPI_Send(bara_i, bara_dim, MPI_INT, 0, 1, MPI_COMM_WORLD);
+              MPI_Send(bara_j, bara_dim, MPI_INT, 0, 2, MPI_COMM_WORLD);
+              MPI_Send(bara_v, bara_dim, MPI_DOUBLE, 0, 3, MPI_COMM_WORLD);
             }
-          /* } */
-      }        
-    
 
+            if (global_rank == 0){
+              MPI_Recv(barau_i, bara_dim, MPI_INT, recv_rank[i], 1, MPI_COMM_WORLD, &status);           
+              MPI_Recv(barau_j, bara_dim, MPI_INT, recv_rank[i], 2, MPI_COMM_WORLD, &status);       
+              MPI_Recv(barau_v, bara_dim, MPI_DOUBLE, recv_rank[i], 3, MPI_COMM_WORLD, &status);
 
-    
+              r = MSK_appendsparsesymmat(task, 2*recv_nu[i], recv_nu[i]*(2*recv_nu[i]+1), barau_i, barau_j, barau_v, &idx);
+              r = MSK_putbaraij(task, j, 2*recv_k[i] + 1, 1, &idx, &falpha);
+            }
+
+            MPI_Barrier(MPI_COMM_WORLD);
+          }
+        }
+      }
+
       gap[irun] = 2*(lambda_u-lambda_l)/(lambda_l+lambda_u);
-      mpi_one_printf("Before maximization, %d, gap is %0.15g \n",irun+1, gap[irun]);
-      
-      freq_gap = 2*(omega_u-omega_l)/(omega_l+omega_u);
-      mpi_one_printf("Before maximization, %d, freq_gap is %0.15g \n",irun+1, freq_gap);
-      
+      if(mpb_mygroup == 0)
+        mpi_one_printf("Before maximization, %d, gap is %0.15g \n",irun+1, gap[irun]);
 
-      if ( r==MSK_RES_OK ) /* && rank==optRank) */
+      freq_gap = 2*(omega_u-omega_l)/(omega_l+omega_u);
+      if(mpb_mygroup == 0)
+        mpi_one_printf("Before maximization, %d, freq_gap is %0.15g \n",irun+1, freq_gap);
+
+      if ( r==MSK_RES_OK && global_rank == 0 )
         {
           MSKrescodee trmcode;
-          
           mpi_one_printf("start msk optimitization\n");
-          
+
           /* Run optimizer */
-          if(rank==0)
-            r = MSK_optimizetrm(task,&trmcode);
-          
+          r = MSK_optimizetrm(task,&trmcode);
+
           mpi_one_printf("msk optimitization done\n");
           MSK_solutionsummary (task,MSK_STREAM_MSG);
           
@@ -898,10 +988,10 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
           
         }
       
-      /* mpi_one_printf("broadcasting u\n"); */
-      /* MPI_Bcast(u, ntot, MPI_DOUBLE, optRank, MPI_COMM_WORLD); */
-      /* mpi_one_printf("broadcasting usum\n"); */
-      /* MPI_Bcast(&usum, 1, MPI_DOUBLE, optRank, MPI_COMM_WORLD); */
+      mpi_one_printf("broadcasting u\n");
+      MPI_Bcast(u, ntot, MPI_DOUBLE, optRank, MPI_COMM_WORLD);
+      mpi_one_printf("broadcasting usum\n");
+      MPI_Bcast(&usum, 1, MPI_DOUBLE, optRank, MPI_COMM_WORLD);
       
       /* update u and epsilon */
       material_grids_set(u, grids, ngrids);
