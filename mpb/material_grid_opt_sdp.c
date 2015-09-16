@@ -521,7 +521,7 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
                                 number low_tol, number upp_tol,char *title)
 {
   int icount, k, ntot, n, ngrids,*nl, *nu,nk,ridx,cidx,rband,cband,count,nltmpt,nutmpt,N,nblocks,stride,maxspdim;
-  double *u,*eigenvalues,*Ctemp,*depsdu,lambda_l,lambda_u,vec[2],usum;
+  double *u,*eigenvalues,*Ctemp,*depsdu,lambda_l,lambda_u,recv_lambda,vec[2],usum;
   double freq_gap, omega_l, omega_u;
   material_grid *grids;
   double lowtol = (double) low_tol; /* determines the size of lower subspace */
@@ -655,6 +655,15 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
 
   r = MSK_makeenv(&env,NULL);      
 
+  material_grids_get(u, grids, ngrids);
+  MPI_Bcast(u, ntot, MPI_DOUBLE, optRank, MPI_COMM_WORLD);
+  material_grids_set(u, grids, ngrids);
+  reset_epsilon();
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  get_epsilon();
+  MPI_Barrier(MPI_COMM_WORLD);
+
   while (irun < maxrun & usum >= utol)
     {
       mpi_one_printf("\n opt step irun = %d \n \n", irun);
@@ -715,7 +724,7 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
       lambda_u = 100.0;
       omega_l = 0.0;
       omega_u = 100;
-      
+
       material_grids_get(u, grids, ngrids);
       
       mpi_one_printf("number of k points is %d \n", nk);
@@ -739,9 +748,6 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
         /* lambda_l and lambda_u updated at each k, only used outside the "for" loop for k */
         lambda_l = MAX2(eigenvalues[band1-1], lambda_l);
         lambda_u = MIN2(eigenvalues[band2-1], lambda_u);
-        
-        omega_l = MAX2(freqs.items[band1-1], omega_l);
-        omega_u = MIN2(freqs.items[band2-1], omega_u);
         
         /* find(const double *v, double scalev, double shiftval, int pos, const int n) */
         nltmpt = (band1-1) - find(eigenvalues,-1,eigenvalues[band1-1]*(1-lowtol),-1,num_bands);
@@ -770,6 +776,8 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
             MPI_Send(&nl[k], 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
             MPI_Send(&nu[k], 1, MPI_INT, 0, 2, MPI_COMM_WORLD);
             MPI_Send(&k, 1, MPI_INT, 0, 3, MPI_COMM_WORLD);
+            MPI_Send(&lambda_l, 1, MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
+            MPI_Send(&lambda_u, 1, MPI_DOUBLE, 0, 5, MPI_COMM_WORLD);
             mpi_one_printf("end send from rank %d\n", i);
           }
           
@@ -782,6 +790,10 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
             MPI_Recv(&recv_nl[i], 1, MPI_INT, recv_rank[i], 1, MPI_COMM_WORLD, &status);
             MPI_Recv(&recv_nu[i], 1, MPI_INT, recv_rank[i], 2, MPI_COMM_WORLD, &status);
             MPI_Recv(&recv_k[i], 1, MPI_INT, recv_rank[i], 3, MPI_COMM_WORLD, &status);
+            MPI_Recv(&recv_lambda, 1, MPI_DOUBLE, recv_rank[i], 4, MPI_COMM_WORLD, &status);
+            lambda_l = MAX2(lambda_l, recv_lambda);
+            MPI_Recv(&recv_lambda, 1, MPI_DOUBLE, recv_rank[i], 5, MPI_COMM_WORLD, &status);
+            lambda_u = MIN2(lambda_u, recv_lambda);
 
             tmp = recv_nl[i] * 2;
             r = MSK_appendbarvars(task, 1, &tmp);
@@ -918,6 +930,9 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
       }
 
       gap[irun] = 2*(lambda_u-lambda_l)/(lambda_l+lambda_u);
+      omega_l = sqrt(lambda_l);
+      omega_u = sqrt(lambda_u);
+
       if(mpb_mygroup == 0)
         mpi_one_printf("Before maximization, %d, gap is %0.15g \n",irun+1, gap[irun]);
 
@@ -935,7 +950,7 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
 
           mpi_one_printf("msk optimitization done\n");
           MSK_solutionsummary (task,MSK_STREAM_MSG);
-          
+
           if ( r==MSK_RES_OK )
             {
 	      MSKsolstae solsta;
@@ -946,11 +961,10 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
                 case MSK_SOL_STA_OPTIMAL:
                 case MSK_SOL_STA_NEAR_OPTIMAL:
                   y   = (double*) MSK_calloctask(task,n,sizeof(MSKrealt));
-                  
+
                   MSK_gety(task, MSK_SOL_ITR, y);
                   MSK_getdualobj (task, MSK_SOL_ITR, obj+irun);
-		  
-		  
+
                   usum = 0.0;
                   for(j=0; j<ntot; j++){
                     usum += fabs(u[j]-y[j]/y[ntot]);
@@ -985,9 +999,9 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
 
           printf("about to delete task\n");
           MSK_deletetask(&task);
-          
+
         }
-      
+
       mpi_one_printf("broadcasting u\n");
       MPI_Bcast(u, ntot, MPI_DOUBLE, optRank, MPI_COMM_WORLD);
       mpi_one_printf("broadcasting usum\n");

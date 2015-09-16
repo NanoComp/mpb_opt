@@ -371,8 +371,8 @@ void set_parity(integer p)
 void num_proc_per_k(integer processes_per_k)
 {
   int rank, sz;
-  MPI_Comm_rank(mpb_comm, &rank);
-  MPI_Comm_size(mpb_comm, &sz);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &sz);
 
   mpb_numgroups = sz/processes_per_k;
   mpb_mygroup = divide_parallel_processes(mpb_numgroups);
