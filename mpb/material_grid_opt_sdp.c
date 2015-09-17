@@ -1006,25 +1006,25 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
       MPI_Bcast(u, ntot, MPI_DOUBLE, optRank, MPI_COMM_WORLD);
       mpi_one_printf("broadcasting usum\n");
       MPI_Bcast(&usum, 1, MPI_DOUBLE, optRank, MPI_COMM_WORLD);
-      
+
       /* update u and epsilon */
       material_grids_set(u, grids, ngrids);
       reset_epsilon();
-      
+
       /* output epsilon file at each iteration */ 
       char prefix[256];       
       snprintf(prefix, 256, "%s%04d-", title, irun+1);
       get_epsilon();
-      output_field_to_file(-1, prefix);
+      if(mpb_mygroup == 0)
+        output_field_to_file(-1, prefix);
       /* output grid file at each iteration */ 
       strcat(prefix,"grid");
-      save_material_grid(*grids, prefix);
-    
+      if(mpb_mygroup == 0)
+        save_material_grid(*grids, prefix);
+
       irun++;
-      
     }
-  
-  
+
   free(nl);
   free(u);
   free(Altemp);
@@ -1033,21 +1033,29 @@ number run_matgrid_optgap_mosek(vector3_list kpoints,
   free(bara_i);
   free(bara_j);
   free(bara_v);
+
+  free(baral_i);
+  free(baral_j);
+  free(baral_v);
+  free(barau_i);
+  free(barau_j);
+  free(barau_v);
+
+  free(recv_nl);
+  free(recv_nu);
+  free(recv_k);
+
   free(eigenvalues);
   free(depsdu);
-  
+
   free(gap);
   free(obj);
-  
-  
+
   free(asub2);
   free(a2val);
-  
   free(barvarList);
-  
   MSK_deleteenv(&env);
 
-  
 #endif
   return 1;
   
